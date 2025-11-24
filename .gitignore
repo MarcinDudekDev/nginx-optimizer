@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+vendor/
+bower_components/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# WordPress specific
+wp-config.php
+.htaccess
