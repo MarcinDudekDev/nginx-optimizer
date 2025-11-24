@@ -193,7 +193,13 @@ check_http3_enabled() {
         return 1
     fi
 
+    # Check in the config file itself
     if grep -q "listen.*quic" "$config_file" 2>/dev/null; then
+        return 0
+    fi
+
+    # Check if conf.d/http3-quic.conf exists (for wp-test)
+    if [ -f "${WP_TEST_NGINX}/conf.d/http3-quic.conf" ]; then
         return 0
     fi
 
@@ -207,7 +213,13 @@ check_fastcgi_cache_enabled() {
         return 1
     fi
 
+    # Check in the config file itself
     if grep -q "fastcgi_cache_path" "$config_file" 2>/dev/null; then
+        return 0
+    fi
+
+    # Check if conf.d/fastcgi-cache.conf exists (for wp-test)
+    if [ -f "${WP_TEST_NGINX}/conf.d/fastcgi-cache.conf" ]; then
         return 0
     fi
 
@@ -239,7 +251,13 @@ check_security_headers() {
         return 1
     fi
 
+    # Check in the config file itself
     if grep -q "Strict-Transport-Security" "$config_file" 2>/dev/null; then
+        return 0
+    fi
+
+    # Check if conf.d/security-headers.conf exists (for wp-test)
+    if [ -f "${WP_TEST_NGINX}/conf.d/security-headers.conf" ]; then
         return 0
     fi
 
@@ -267,7 +285,13 @@ check_wordpress_exclusions() {
         return 1
     fi
 
+    # Check in the config file itself
     if grep -q "xmlrpc" "$config_file" 2>/dev/null; then
+        return 0
+    fi
+
+    # Check if conf.d/wordpress-exclusions.conf exists (for wp-test)
+    if [ -f "${WP_TEST_NGINX}/conf.d/wordpress-exclusions.conf" ]; then
         return 0
     fi
 
