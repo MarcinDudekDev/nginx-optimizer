@@ -75,13 +75,13 @@ create_backup_metadata() {
     # Get nginx version if available
     local nginx_version="unknown"
     if command -v nginx &>/dev/null; then
-        nginx_version=$(nginx -v 2>&1 | grep -oP 'nginx/\K[0-9.]+')
+        nginx_version=$(nginx -v 2>&1 | sed -n 's/.*nginx\/\([0-9.]*\).*/\1/p')
     fi
 
     # Get PHP version if available
     local php_version="unknown"
     if command -v php &>/dev/null; then
-        php_version=$(php -v | head -1 | grep -oP 'PHP \K[0-9.]+')
+        php_version=$(php -v | head -1 | sed -n 's/^PHP \([0-9.]*\).*/\1/p')
     fi
 
     cat > "$metadata_file" << EOF

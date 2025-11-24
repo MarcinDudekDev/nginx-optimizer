@@ -71,12 +71,12 @@ WORKDIR /tmp
 RUN git clone --recurse-submodules https://github.com/google/ngx_brotli.git
 
 # Get nginx source matching the base image version
-RUN NGINX_VERSION=$(nginx -v 2>&1 | grep -oP 'nginx/\K[0-9.]+') && \
+RUN NGINX_VERSION=$(nginx -v 2>&1 | sed -n 's/.*nginx\/\([0-9.]*\).*/\1/p') && \
     wget http://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz && \
     tar -xzf nginx-${NGINX_VERSION}.tar.gz
 
 # Configure and build nginx with Brotli
-RUN NGINX_VERSION=$(nginx -v 2>&1 | grep -oP 'nginx/\K[0-9.]+') && \
+RUN NGINX_VERSION=$(nginx -v 2>&1 | sed -n 's/.*nginx\/\([0-9.]*\).*/\1/p') && \
     cd nginx-${NGINX_VERSION} && \
     ./configure \
         --prefix=/etc/nginx \

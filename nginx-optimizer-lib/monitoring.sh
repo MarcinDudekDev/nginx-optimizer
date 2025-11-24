@@ -179,7 +179,7 @@ elif [ "$LOG_TYPE" = "error" ]; then
     echo ""
 
     echo "Error Frequency:"
-    grep -oP '\[error\] \d+#\d+: \*\d+ \K.*?(?=,)' "$ERROR_LOG" | sort | uniq -c | sort -rn | head -10
+    sed -n 's/.*\[error\] [0-9]*#[0-9]*: \*[0-9]* \([^,]*\).*/\1/p' "$ERROR_LOG" | sort | uniq -c | sort -rn | head -10
     echo ""
 
 else
@@ -216,7 +216,7 @@ echo "Nginx Status:"
 echo "─────────────"
 if command -v systemctl &>/dev/null && systemctl is-active --quiet nginx; then
     echo "✓ Running"
-    NGINX_VERSION=$(nginx -v 2>&1 | grep -oP 'nginx/\K[0-9.]+')
+    NGINX_VERSION=$(nginx -v 2>&1 | sed -n 's/.*nginx\/\([0-9.]*\).*/\1/p')
     echo "  Version: $NGINX_VERSION"
 elif pgrep nginx &>/dev/null; then
     echo "✓ Running"
@@ -254,7 +254,7 @@ echo "───────────────"
 if command -v php-fpm &>/dev/null || pgrep php-fpm &>/dev/null; then
     echo "✓ Running"
     if command -v php &>/dev/null; then
-        PHP_VERSION=$(php -v | head -1 | grep -oP 'PHP \K[0-9.]+')
+        PHP_VERSION=$(php -v | head -1 | sed -n 's/^PHP \([0-9.]*\).*/\1/p')
         echo "  Version: $PHP_VERSION"
     fi
 else

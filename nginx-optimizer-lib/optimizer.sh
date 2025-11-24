@@ -32,7 +32,13 @@ apply_optimizations() {
 
         # Remove excluded feature
         if [ -n "$exclude_feature" ]; then
-            features=("${features[@]/$exclude_feature}")
+            local temp_features=()
+            for feature in "${features[@]}"; do
+                if [ "$feature" != "$exclude_feature" ] && [ -n "$feature" ]; then
+                    temp_features+=("$feature")
+                fi
+            done
+            features=("${temp_features[@]}")
         fi
     fi
 
@@ -95,7 +101,7 @@ optimize_http3() {
 
     # Check nginx version
     if command -v nginx &>/dev/null; then
-        local version=$(nginx -v 2>&1 | grep -oP 'nginx/\K[0-9.]+')
+        local version=$(nginx -v 2>&1 | sed -n 's/.*nginx\/\([0-9.]*\).*/\1/p')
 
         if ! awk -v ver="$version" 'BEGIN { if (ver >= 1.25) exit 0; else exit 1 }'; then
             log_warn "HTTP/3 requires nginx >= 1.25.0 (current: $version)"
@@ -512,21 +518,26 @@ gzip_vary on;
 gzip_comp_level 6;
 gzip_min_length 1000;
 gzip_proxied any;
-gzip_types
-    text/plain
-    text/css
-    text/xml
-    text/javascript
-    application/json
-    application/javascript
-    application/x-javascript
-    application/xml
-    application/xml+rss
-    application/vnd.ms-fontobject
-    application/x-font-ttf
-    font/opentype
-    image/svg+xml
-    image/x-icon;
+
+# Note: gzip_types may already be defined in your main nginx config or proxy.conf
+# Comment out or remove this section if you see "duplicate MIME type" warnings
+# Uncomment only the additional types not already in your config
+# gzip_types
+#     text/plain
+#     text/css
+#     text/xml
+#     text/javascript
+#     application/json
+#     application/javascript
+#     application/x-javascript
+#     application/xml
+#     application/xml+rss
+#     application/vnd.ms-fontobject
+#     application/x-font-ttf
+#     font/opentype
+#     image/svg+xml
+#     image/x-icon;
+
 gzip_disable "msie6";
 EOF
 
@@ -817,7 +828,7 @@ apply_opcache_config() {
 
     # Find PHP version
     if command -v php &>/dev/null; then
-        local php_version=$(php -v | head -1 | grep -oP 'PHP \K[0-9]\.[0-9]')
+        local php_version=$(php -v | head -1 | sed -n 's/^PHP \([0-9]\.[0-9]\).*/\1/p')
 
         if [ -n "$php_version" ]; then
             local php_conf_dir="/etc/php/${php_version}/fpm/conf.d"
