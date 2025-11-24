@@ -22,13 +22,23 @@ SITE_CONFIGS=(
 WP_TEST_NGINX="${HOME}/.wp-test/nginx"
 WP_TEST_SITES="${HOME}/.wp-test/sites"
 
-# Store detected instances (simple arrays for compatibility)
-NGINX_INSTANCES=()
-OPTIMIZATION_STATUS=()
+# Store detected instances as "type:name:path" entries
+DETECTED_INSTANCES=()
 
 ################################################################################
 # Detection Functions
 ################################################################################
+
+add_instance() {
+    local type="$1"
+    local name="$2"
+    local path="$3"
+    DETECTED_INSTANCES+=("${type}:${name}:${path}")
+}
+
+get_instance_count() {
+    echo "${#DETECTED_INSTANCES[@]}"
+}
 
 detect_system_nginx() {
     log_info "Checking for system nginx..."
@@ -36,18 +46,11 @@ detect_system_nginx() {
     for conf in "${NGINX_LOCATIONS[@]}"; do
         if [ -f "$conf" ]; then
             log_success "Found system nginx: $conf"
-            NGINX_INSTANCES["system"]="$conf"
+            add_instance "system" "nginx" "$conf"
 
             if command -v nginx &>/dev/null; then
-                local version=$(nginx -v 2>&1 | grep -oP 'nginx/\K[0-9.]+')
+                local version=$(nginx -v 2>&1 | sed -n 's/.*nginx\/\([0-9.]*\).*/\1/p')
                 log_info "  Version: $version"
-
-                # Check if HTTP/3 capable
-                if awk -v ver="$version" 'BEGIN { if (ver >= 1.25) exit 0; else exit 1 }'; then
-                    log_success "  HTTP/3 capable (>= 1.25.0)"
-                else
-                    log_warn "  HTTP/3 requires nginx >= 1.25.0"
-                fi
             fi
             return 0
         fi
@@ -65,18 +68,32 @@ detect_docker_nginx() {
         return 1
     fi
 
+    # Check if Docker is running
+    if ! docker info &>/dev/null; then
+        log_info "Docker not running"
+        return 1
+    fi
+
+    # Check for nginx containers
     local containers=$(docker ps --filter "ancestor=nginx" --format "{{.Names}}" 2>/dev/null)
+
+    # Also check for wp-test-proxy specifically
+    if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "wp-test-proxy"; then
+        log_success "Found wp-test nginx-proxy container"
+        add_instance "docker" "wp-test-proxy" "wp-test-proxy"
+    fi
 
     if [ -n "$containers" ]; then
         while IFS= read -r container; do
-            log_success "Found Docker nginx: $container"
-            NGINX_INSTANCES["docker_${container}"]="$container"
+            if [ "$container" != "wp-test-proxy" ]; then
+                log_success "Found Docker nginx: $container"
+                add_instance "docker" "$container" "$container"
+            fi
         done <<< "$containers"
         return 0
-    else
-        log_info "No Docker nginx containers found"
-        return 1
     fi
+
+    return 1
 }
 
 detect_wp_test_sites() {
@@ -89,10 +106,10 @@ detect_wp_test_sites() {
 
     local site_count=0
     for site_dir in "$WP_TEST_SITES"/*; do
-        if [ -d "$site_dir" ]; then
+        if [ -d "$site_dir" ] && [ "$(basename "$site_dir")" != ".DS_Store" ]; then
             local domain=$(basename "$site_dir")
             log_success "Found wp-test site: $domain"
-            NGINX_INSTANCES["wp_test_${domain}"]="$site_dir"
+            add_instance "wp_test" "$domain" "$site_dir"
             ((site_count++))
         fi
     done
@@ -100,6 +117,12 @@ detect_wp_test_sites() {
     if [ $site_count -eq 0 ]; then
         log_info "No wp-test sites found"
         return 1
+    fi
+
+    # Also check for wp-test nginx config
+    if [ -f "$WP_TEST_NGINX/proxy.conf" ]; then
+        log_success "Found wp-test nginx config: $WP_TEST_NGINX/proxy.conf"
+        add_instance "wp_test_nginx" "proxy" "$WP_TEST_NGINX/proxy.conf"
     fi
 
     log_success "Found $site_count wp-test site(s)"
@@ -112,27 +135,34 @@ detect_nginx_instances() {
     log_info "Scanning for nginx installations..."
     echo ""
 
+    # Reset instances array
+    DETECTED_INSTANCES=()
+
     if [ -n "$target_site" ]; then
         # Check if it's a wp-test site
         if [ -d "$WP_TEST_SITES/$target_site" ]; then
-            NGINX_INSTANCES["wp_test_${target_site}"]="$WP_TEST_SITES/$target_site"
+            add_instance "wp_test" "$target_site" "$WP_TEST_SITES/$target_site"
             log_success "Target site found: $target_site"
         else
             log_error "Site not found: $target_site"
             exit 1
         fi
     else
-        # Detect all
-        detect_system_nginx
-        detect_docker_nginx
-        detect_wp_test_sites
+        # Detect all (ignore return codes - we accumulate instances)
+        detect_system_nginx || true
+        detect_docker_nginx || true
+        detect_wp_test_sites || true
     fi
 
     echo ""
-    if [ ${#NGINX_INSTANCES[@]} -eq 0 ]; then
+    local count=$(get_instance_count)
+    if [ "$count" -eq 0 ]; then
         log_warn "No nginx installations detected"
-        exit 1
+        return 1
     fi
+
+    log_success "Detected $count nginx instance(s)"
+    return 0
 }
 
 list_nginx_instances() {
@@ -143,8 +173,11 @@ list_nginx_instances() {
     echo "Detected NGINX Installations:"
     echo "═══════════════════════════════════════════════════════════"
 
-    for key in "${!NGINX_INSTANCES[@]}"; do
-        echo "  • $key: ${NGINX_INSTANCES[$key]}"
+    for entry in "${DETECTED_INSTANCES[@]}"; do
+        local type=$(echo "$entry" | cut -d: -f1)
+        local name=$(echo "$entry" | cut -d: -f2)
+        local path=$(echo "$entry" | cut -d: -f3-)
+        echo "  • [$type] $name: $path"
     done
     echo ""
 }
@@ -192,7 +225,6 @@ check_brotli_enabled() {
         return 0
     fi
 
-    # Check if module is loaded
     if grep -q "ngx_http_brotli" "$config_file" 2>/dev/null; then
         return 0
     fi
@@ -242,10 +274,23 @@ check_wordpress_exclusions() {
     return 1
 }
 
+check_gzip_enabled() {
+    local config_file="$1"
+
+    if [ ! -f "$config_file" ]; then
+        return 1
+    fi
+
+    if grep -q "gzip on" "$config_file" 2>/dev/null; then
+        return 0
+    fi
+
+    return 1
+}
+
 check_redis_configured() {
     local site_dir="$1"
 
-    # Check for Redis container in docker-compose.yml
     local compose_file="${site_dir}/docker-compose.yml"
 
     if [ ! -f "$compose_file" ]; then
@@ -263,54 +308,49 @@ analyze_config_file() {
     local config_file="$1"
     local instance_name="$2"
 
-    log_info "Analyzing: $instance_name"
-
-    local optimizations=()
+    log_info "Analyzing: $instance_name ($config_file)"
 
     if check_http3_enabled "$config_file"; then
-        optimizations+=("✓ HTTP/3 QUIC")
+        echo -e "    ${GREEN}✓ HTTP/3 QUIC${NC}"
     else
-        optimizations+=("✗ HTTP/3 QUIC")
+        echo -e "    ${YELLOW}✗ HTTP/3 QUIC${NC}"
     fi
 
     if check_fastcgi_cache_enabled "$config_file"; then
-        optimizations+=("✓ FastCGI Cache")
+        echo -e "    ${GREEN}✓ FastCGI Cache${NC}"
     else
-        optimizations+=("✗ FastCGI Cache")
+        echo -e "    ${YELLOW}✗ FastCGI Cache${NC}"
     fi
 
     if check_brotli_enabled "$config_file"; then
-        optimizations+=("✓ Brotli Compression")
+        echo -e "    ${GREEN}✓ Brotli Compression${NC}"
     else
-        optimizations+=("✗ Brotli Compression")
+        echo -e "    ${YELLOW}✗ Brotli Compression${NC}"
+    fi
+
+    if check_gzip_enabled "$config_file"; then
+        echo -e "    ${GREEN}✓ Gzip Compression${NC}"
+    else
+        echo -e "    ${YELLOW}✗ Gzip Compression${NC}"
     fi
 
     if check_security_headers "$config_file"; then
-        optimizations+=("✓ Security Headers")
+        echo -e "    ${GREEN}✓ Security Headers${NC}"
     else
-        optimizations+=("✗ Security Headers")
+        echo -e "    ${YELLOW}✗ Security Headers${NC}"
     fi
 
     if check_rate_limiting "$config_file"; then
-        optimizations+=("✓ Rate Limiting")
+        echo -e "    ${GREEN}✓ Rate Limiting${NC}"
     else
-        optimizations+=("✗ Rate Limiting")
+        echo -e "    ${YELLOW}✗ Rate Limiting${NC}"
     fi
 
     if check_wordpress_exclusions "$config_file"; then
-        optimizations+=("✓ WordPress Exclusions")
+        echo -e "    ${GREEN}✓ WordPress Exclusions${NC}"
     else
-        optimizations+=("✗ WordPress Exclusions")
+        echo -e "    ${YELLOW}✗ WordPress Exclusions${NC}"
     fi
-
-    # Print results
-    for opt in "${optimizations[@]}"; do
-        if [[ "$opt" == ✓* ]]; then
-            echo -e "    ${GREEN}${opt}${NC}"
-        else
-            echo -e "    ${YELLOW}${opt}${NC}"
-        fi
-    done
 
     echo ""
 }
@@ -330,7 +370,9 @@ analyze_wp_test_site() {
     # Check vhost config
     local vhost_conf="${WP_TEST_NGINX}/vhost.d/${site_name}"
     if [ -f "$vhost_conf" ]; then
-        analyze_config_file "$vhost_conf" "VHost Config"
+        analyze_config_file "$vhost_conf" "VHost Config ($site_name)"
+    else
+        log_info "  No custom vhost config for $site_name"
     fi
 
     # Check Redis
@@ -357,19 +399,27 @@ analyze_optimizations() {
     echo "═══════════════════════════════════════════════════════════"
     echo ""
 
-    for key in "${!NGINX_INSTANCES[@]}"; do
-        local value="${NGINX_INSTANCES[$key]}"
+    for entry in "${DETECTED_INSTANCES[@]}"; do
+        local type=$(echo "$entry" | cut -d: -f1)
+        local name=$(echo "$entry" | cut -d: -f2)
+        local path=$(echo "$entry" | cut -d: -f3-)
 
-        if [[ "$key" == wp_test_* ]]; then
-            local site_name=$(echo "$key" | sed 's/^wp_test_//')
-            analyze_wp_test_site "$site_name" "$value"
-        elif [[ "$key" == "system" ]]; then
-            analyze_config_file "$value" "System Nginx"
-        elif [[ "$key" == docker_* ]]; then
-            log_info "Docker container: $value"
-            echo -e "    ${YELLOW}⚠ Manual inspection required${NC}"
-            echo ""
-        fi
+        case "$type" in
+            wp_test)
+                analyze_wp_test_site "$name" "$path"
+                ;;
+            wp_test_nginx)
+                analyze_config_file "$path" "wp-test nginx ($name)"
+                ;;
+            system)
+                analyze_config_file "$path" "System Nginx"
+                ;;
+            docker)
+                log_info "Docker container: $name"
+                echo -e "    ${YELLOW}⚠ Manual inspection required for Docker containers${NC}"
+                echo ""
+                ;;
+        esac
     done
 }
 
@@ -382,6 +432,6 @@ show_status() {
     echo "═══════════════════════════════════════════════════════════"
     echo "Legend:"
     echo -e "  ${GREEN}✓${NC} = Enabled"
-    echo -e "  ${YELLOW}✗${NC} = Missing"
+    echo -e "  ${YELLOW}✗${NC} = Missing (can be optimized)"
     echo "═══════════════════════════════════════════════════════════"
 }
