@@ -4,16 +4,19 @@ Comprehensive NGINX optimization tool with HTTP/3, Brotli, FastCGI cache, Redis,
 
 ## Installation
 
-The script is already installed at `/Users/cminds/Tools/nginx-optimizer`
+Clone or download to your preferred location:
+```bash
+git clone https://github.com/MarcinDudekDev/nginx-optimizer.git ~/Tools/nginx-optimizer
+```
 
 Make sure it's executable:
 ```bash
-chmod +x /Users/cminds/Tools/nginx-optimizer
+chmod +x ~/Tools/nginx-optimizer/nginx-optimizer.sh
 ```
 
 Add to PATH (optional):
 ```bash
-echo 'export PATH="$PATH:/Users/cminds/Tools"' >> ~/.zshrc
+echo 'export PATH="$PATH:$HOME/Tools/nginx-optimizer"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
@@ -115,8 +118,8 @@ nginx-optimizer optimize --exclude brotli
 ## Directory Structure
 
 ```
-/Users/cminds/Tools/
-├── nginx-optimizer              # Main executable
+nginx-optimizer/
+├── nginx-optimizer.sh           # Main executable
 ├── nginx-optimizer-lib/         # Library modules
 │   ├── detector.sh             # Detection & analysis
 │   ├── backup.sh               # Backup management

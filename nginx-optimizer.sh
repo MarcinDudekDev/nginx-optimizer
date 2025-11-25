@@ -195,7 +195,7 @@ ENVIRONMENT:
     Backups stored in: ${BACKUP_DIR}
     Logs stored in: ${LOG_DIR}
 
-For more information, visit: https://github.com/cminds/nginx-optimizer
+For more information, visit: https://github.com/MarcinDudekDev/nginx-optimizer
 EOF
 }
 
