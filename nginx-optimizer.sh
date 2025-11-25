@@ -135,6 +135,7 @@ USAGE:
 COMMANDS:
     analyze [site]              Analyze nginx config & show missing optimizations
     optimize [site]             Apply optimizations to site or all sites
+    compile                     Compile nginx from source with Brotli support
     rollback [timestamp]        Rollback to previous configuration
     test [site]                 Test nginx configuration
     status [site]               Show optimization status
@@ -334,6 +335,17 @@ cmd_benchmark() {
     fi
 }
 
+cmd_compile() {
+    log_info "Compiling nginx from source with Brotli support..."
+
+    if type -t compile_nginx_with_brotli &>/dev/null; then
+        compile_nginx_with_brotli
+    else
+        log_error "Compiler library not loaded"
+        exit 1
+    fi
+}
+
 ################################################################################
 # Argument Parsing
 ################################################################################
@@ -343,7 +355,7 @@ parse_arguments() {
 
     while [ $# -gt 0 ]; do
         case "$1" in
-            analyze|optimize|rollback|test|status|list|benchmark|help)
+            analyze|optimize|compile|rollback|test|status|list|benchmark|help)
                 COMMAND="$1"
                 shift
                 ;;
@@ -420,6 +432,9 @@ main() {
             ;;
         optimize)
             cmd_optimize
+            ;;
+        compile)
+            cmd_compile
             ;;
         rollback)
             cmd_rollback "$TARGET_SITE"
