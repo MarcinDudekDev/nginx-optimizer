@@ -42,6 +42,52 @@ purge_cached_templates() {
 }
 
 ################################################################################
+# Server Block Injection
+################################################################################
+
+inject_server_includes() {
+    local include_file="$1"
+    local include_name="$2"
+    local sites_dir="/etc/nginx/sites-enabled"
+
+    if [ ! -d "$sites_dir" ]; then
+        log_warn "No sites-enabled directory found at $sites_dir"
+        return 1
+    fi
+
+    local injected=0
+    for site_conf in "$sites_dir"/*; do
+        [ -f "$site_conf" ] || continue
+
+        # Skip if already includes this file
+        if grep -q "include.*${include_name}" "$site_conf" 2>/dev/null; then
+            log_info "Already included in: $(basename "$site_conf")"
+            continue
+        fi
+
+        # Check if file contains server block
+        if ! grep -q "server[[:space:]]*{" "$site_conf" 2>/dev/null; then
+            log_info "No server block in: $(basename "$site_conf")"
+            continue
+        fi
+
+        # Inject include after first "server {" line
+        sudo sed -i '/server[[:space:]]*{/a\    include '"$include_file"';' "$site_conf"
+
+        log_success "Injected into: $(basename "$site_conf")"
+        injected=$((injected + 1))
+    done
+
+    if [ $injected -gt 0 ]; then
+        log_info "Injected into $injected server block(s)"
+    else
+        log_info "No new injections needed"
+    fi
+
+    return 0
+}
+
+################################################################################
 # Main Optimization Function
 ################################################################################
 
@@ -661,13 +707,19 @@ apply_security_config() {
         log_success "Security configured for wp-test"
     fi
 
-    # Apply to system nginx (http context template - rate limiting zones only)
+    # Apply to system nginx
     if [ -f /etc/nginx/nginx.conf ]; then
+        # Deploy rate limiting zones to conf.d (http context)
         local nginx_conf_d="/etc/nginx/conf.d"
         if [ -d "$nginx_conf_d" ]; then
             sudo cp "${TEMPLATE_DIR}/security-http.conf" "$nginx_conf_d/" 2>/dev/null || true
             log_success "Rate limiting zones configured for system nginx"
-            log_info "Note: Security headers need to be added to individual server blocks"
+        fi
+
+        # Auto-inject security headers into server blocks
+        if [ -d "/etc/nginx/sites-enabled" ]; then
+            log_info "Auto-injecting security headers into server blocks..."
+            inject_server_includes "${TEMPLATE_DIR}/security-headers.conf" "security-headers.conf"
         fi
     fi
 }
@@ -762,12 +814,16 @@ apply_wordpress_config() {
         log_success "WordPress exclusions configured for wp-test"
     fi
 
-    # For system nginx: location blocks can't go in conf.d (http context)
-    # They need to be included in individual server blocks
+    # For system nginx: auto-inject into server blocks
     if [ -f /etc/nginx/nginx.conf ]; then
-        log_info "WordPress exclusions template created at: ${TEMPLATE_DIR}/wordpress-exclusions.conf"
-        log_info "Include this file in your server blocks: include ${TEMPLATE_DIR}/wordpress-exclusions.conf;"
-        log_warn "Cannot auto-deploy location blocks to system nginx conf.d (requires server context)"
+        if [ -d "/etc/nginx/sites-enabled" ]; then
+            log_info "Auto-injecting WordPress exclusions into server blocks..."
+            inject_server_includes "${TEMPLATE_DIR}/wordpress-exclusions.conf" "wordpress-exclusions.conf"
+        else
+            # Fallback to manual instructions if no sites-enabled
+            log_info "WordPress exclusions template created at: ${TEMPLATE_DIR}/wordpress-exclusions.conf"
+            log_info "Include this file in your server blocks: include ${TEMPLATE_DIR}/wordpress-exclusions.conf;"
+        fi
     fi
 }
 
