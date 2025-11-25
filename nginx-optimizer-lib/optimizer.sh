@@ -18,6 +18,7 @@ purge_cached_templates() {
     local templates=(
         "compression.conf"
         "security-headers.conf"
+        "security-http.conf"
         "fastcgi-cache.conf"
         "http3-quic.conf"
         "wordpress-exclusions.conf"
@@ -609,13 +610,14 @@ optimize_security() {
 }
 
 create_security_template() {
+    # Full template for wp-test (inside server blocks)
     cat > "${TEMPLATE_DIR}/security-headers.conf" << 'EOF'
-# Security Headers Configuration
+# Security Headers Configuration (for server context)
 
-# Rate limiting zones
-limit_req_zone $binary_remote_addr zone=wp_login:10m rate=15r/m;
-limit_req_zone $binary_remote_addr zone=wp_general:10m rate=30r/m;
-limit_conn_zone $binary_remote_addr zone=conn_limit:10m;
+# Rate limiting zones (must be in http context - add to main config)
+# limit_req_zone $binary_remote_addr zone=wp_login:10m rate=15r/m;
+# limit_req_zone $binary_remote_addr zone=wp_general:10m rate=30r/m;
+# limit_conn_zone $binary_remote_addr zone=conn_limit:10m;
 
 # Security headers
 add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
@@ -627,19 +629,17 @@ add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
 
 # CSP for frontend (less strict)
 add_header Content-Security-Policy "default-src 'self' 'unsafe-inline' 'unsafe-eval' https: data: 'unsafe-hashes';" always;
+EOF
 
-# Rate limit wp-login.php
-location = /wp-login.php {
-    limit_req zone=wp_login burst=5 nodelay;
-    fastcgi_pass unix:/var/run/php/php-fpm.sock;
-    include fastcgi_params;
-}
+    # HTTP context template for system nginx (conf.d)
+    cat > "${TEMPLATE_DIR}/security-http.conf" << 'EOF'
+# Security Configuration - HTTP Context
+# Place in /etc/nginx/conf.d/
 
-# General PHP rate limiting
-location ~ \.php$ {
-    limit_req zone=wp_general burst=10 nodelay;
-    limit_conn conn_limit 10;
-}
+# Rate limiting zones
+limit_req_zone $binary_remote_addr zone=wp_login:10m rate=15r/m;
+limit_req_zone $binary_remote_addr zone=wp_general:10m rate=30r/m;
+limit_conn_zone $binary_remote_addr zone=conn_limit:10m;
 EOF
 
     log_info "Created security headers template"
@@ -655,18 +655,19 @@ apply_security_config() {
         return
     fi
 
-    # Apply to wp-test
+    # Apply to wp-test (server context template)
     if [ -d "$WP_TEST_NGINX" ]; then
         cp "${TEMPLATE_DIR}/security-headers.conf" "${WP_TEST_NGINX}/conf.d/"
         log_success "Security configured for wp-test"
     fi
 
-    # Apply to system nginx
+    # Apply to system nginx (http context template - rate limiting zones only)
     if [ -f /etc/nginx/nginx.conf ]; then
         local nginx_conf_d="/etc/nginx/conf.d"
         if [ -d "$nginx_conf_d" ]; then
-            sudo cp "${TEMPLATE_DIR}/security-headers.conf" "$nginx_conf_d/" 2>/dev/null || true
-            log_success "Security configured for system nginx"
+            sudo cp "${TEMPLATE_DIR}/security-http.conf" "$nginx_conf_d/" 2>/dev/null || true
+            log_success "Rate limiting zones configured for system nginx"
+            log_info "Note: Security headers need to be added to individual server blocks"
         fi
     fi
 }
@@ -755,19 +756,18 @@ apply_wordpress_config() {
         return
     fi
 
-    # Apply to wp-test
+    # Apply to wp-test (works because proxy handles server context)
     if [ -d "$WP_TEST_NGINX" ]; then
         cp "${TEMPLATE_DIR}/wordpress-exclusions.conf" "${WP_TEST_NGINX}/conf.d/"
         log_success "WordPress exclusions configured for wp-test"
     fi
 
-    # Apply to system nginx
+    # For system nginx: location blocks can't go in conf.d (http context)
+    # They need to be included in individual server blocks
     if [ -f /etc/nginx/nginx.conf ]; then
-        local nginx_conf_d="/etc/nginx/conf.d"
-        if [ -d "$nginx_conf_d" ]; then
-            sudo cp "${TEMPLATE_DIR}/wordpress-exclusions.conf" "$nginx_conf_d/" 2>/dev/null || true
-            log_success "WordPress exclusions configured for system nginx"
-        fi
+        log_info "WordPress exclusions template created at: ${TEMPLATE_DIR}/wordpress-exclusions.conf"
+        log_info "Include this file in your server blocks: include ${TEMPLATE_DIR}/wordpress-exclusions.conf;"
+        log_warn "Cannot auto-deploy location blocks to system nginx conf.d (requires server context)"
     fi
 }
 
