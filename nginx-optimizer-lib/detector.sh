@@ -186,24 +186,21 @@ list_nginx_instances() {
 # Configuration Analysis Functions
 ################################################################################
 
-# Cache for compiled nginx config (to avoid multiple calls to nginx -T)
-COMPILED_CONFIG=""
-
-get_compiled_config() {
-    if [ -z "$COMPILED_CONFIG" ]; then
-        if command -v nginx &>/dev/null; then
-            COMPILED_CONFIG=$(nginx -T 2>/dev/null || echo "")
-        fi
+# Check compiled nginx config directly (more reliable than caching large output)
+check_nginx_compiled() {
+    local pattern="$1"
+    if command -v nginx &>/dev/null; then
+        nginx -T 2>/dev/null | grep -q "$pattern"
+        return $?
     fi
-    echo "$COMPILED_CONFIG"
+    return 1
 }
 
 check_http3_enabled() {
     local config_file="$1"
-    local compiled=$(get_compiled_config)
 
     # Check compiled config first (most reliable)
-    if [ -n "$compiled" ] && echo "$compiled" | grep -q "listen.*quic"; then
+    if check_nginx_compiled "listen.*quic"; then
         return 0
     fi
 
@@ -217,10 +214,9 @@ check_http3_enabled() {
 
 check_fastcgi_cache_enabled() {
     local config_file="$1"
-    local compiled=$(get_compiled_config)
 
     # Check compiled config first
-    if [ -n "$compiled" ] && echo "$compiled" | grep -q "fastcgi_cache_path"; then
+    if check_nginx_compiled "fastcgi_cache_path"; then
         return 0
     fi
 
@@ -234,10 +230,9 @@ check_fastcgi_cache_enabled() {
 
 check_brotli_enabled() {
     local config_file="$1"
-    local compiled=$(get_compiled_config)
 
     # Check compiled config first
-    if [ -n "$compiled" ] && echo "$compiled" | grep -q "brotli on"; then
+    if check_nginx_compiled "brotli on"; then
         return 0
     fi
 
@@ -258,10 +253,9 @@ check_brotli_enabled() {
 
 check_security_headers() {
     local config_file="$1"
-    local compiled=$(get_compiled_config)
 
     # Check compiled config first
-    if [ -n "$compiled" ] && echo "$compiled" | grep -q "Strict-Transport-Security"; then
+    if check_nginx_compiled "Strict-Transport-Security"; then
         return 0
     fi
 
@@ -275,10 +269,9 @@ check_security_headers() {
 
 check_rate_limiting() {
     local config_file="$1"
-    local compiled=$(get_compiled_config)
 
     # Check compiled config first
-    if [ -n "$compiled" ] && echo "$compiled" | grep -q "limit_req_zone"; then
+    if check_nginx_compiled "limit_req_zone"; then
         return 0
     fi
 
@@ -292,10 +285,9 @@ check_rate_limiting() {
 
 check_wordpress_exclusions() {
     local config_file="$1"
-    local compiled=$(get_compiled_config)
 
     # Check compiled config first
-    if [ -n "$compiled" ] && echo "$compiled" | grep -q "xmlrpc"; then
+    if check_nginx_compiled "xmlrpc"; then
         return 0
     fi
 
@@ -309,10 +301,9 @@ check_wordpress_exclusions() {
 
 check_gzip_enabled() {
     local config_file="$1"
-    local compiled=$(get_compiled_config)
 
     # Check compiled config first
-    if [ -n "$compiled" ] && echo "$compiled" | grep -q "gzip on"; then
+    if check_nginx_compiled "gzip on"; then
         return 0
     fi
 
@@ -428,9 +419,6 @@ analyze_wp_test_site() {
 
 analyze_optimizations() {
     local target_site="$1"
-
-    # Reset compiled config cache for fresh analysis
-    COMPILED_CONFIG=""
 
     echo ""
     echo "═══════════════════════════════════════════════════════════"
