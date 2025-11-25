@@ -102,7 +102,7 @@ inject_server_includes() {
         fi
 
         # Inject include after first "server {" line
-        sudo sed -i '/server[[:space:]]*{/a\    include '"$include_file"';' "$site_conf"
+        sudo sed -i "/server[[:space:]]*{/a\\    include ${include_file};" "$site_conf"
 
         log_success "Injected into: $(basename "$site_conf")"
         injected=$((injected + 1))
