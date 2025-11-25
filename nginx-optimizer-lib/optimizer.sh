@@ -8,6 +8,37 @@
 declare -a APPLIED_OPTIMIZATIONS
 
 ################################################################################
+# Cache Management
+################################################################################
+
+purge_cached_templates() {
+    log_info "Purging cached templates to ensure fresh configuration..."
+
+    # List of dynamically generated templates that should be refreshed
+    local templates=(
+        "compression.conf"
+        "security-headers.conf"
+        "fastcgi-cache.conf"
+        "http3-quic.conf"
+        "wordpress-exclusions.conf"
+        "opcache.ini"
+    )
+
+    local purged=0
+    for template in "${templates[@]}"; do
+        local template_path="${TEMPLATE_DIR}/${template}"
+        if [ -f "$template_path" ]; then
+            rm -f "$template_path"
+            ((purged++))
+        fi
+    done
+
+    if [ $purged -gt 0 ]; then
+        log_info "Purged $purged cached template(s)"
+    fi
+}
+
+################################################################################
 # Main Optimization Function
 ################################################################################
 
@@ -15,6 +46,9 @@ apply_optimizations() {
     local target_site="$1"
     local specific_feature="$2"
     local exclude_feature="$3"
+
+    # Purge cached templates to avoid stale config issues
+    purge_cached_templates
 
     log_info "Applying optimizations..."
 
