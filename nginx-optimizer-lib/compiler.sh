@@ -74,7 +74,12 @@ download_nginx_source() {
 }
 
 download_brotli_module() {
-    git clone --recurse-submodules https://github.com/google/ngx_brotli.git
+    if [ -d "ngx_brotli" ]; then
+        log_info "Brotli module already exists, updating..."
+        cd ngx_brotli && git pull && git submodule update --init --recursive && cd ..
+    else
+        git clone --recurse-submodules https://github.com/google/ngx_brotli.git
+    fi
 }
 
 build_brotli_library() {
