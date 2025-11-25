@@ -660,6 +660,15 @@ apply_security_config() {
         cp "${TEMPLATE_DIR}/security-headers.conf" "${WP_TEST_NGINX}/conf.d/"
         log_success "Security configured for wp-test"
     fi
+
+    # Apply to system nginx
+    if [ -f /etc/nginx/nginx.conf ]; then
+        local nginx_conf_d="/etc/nginx/conf.d"
+        if [ -d "$nginx_conf_d" ]; then
+            sudo cp "${TEMPLATE_DIR}/security-headers.conf" "$nginx_conf_d/" 2>/dev/null || true
+            log_success "Security configured for system nginx"
+        fi
+    fi
 }
 
 ################################################################################
@@ -746,9 +755,19 @@ apply_wordpress_config() {
         return
     fi
 
+    # Apply to wp-test
     if [ -d "$WP_TEST_NGINX" ]; then
         cp "${TEMPLATE_DIR}/wordpress-exclusions.conf" "${WP_TEST_NGINX}/conf.d/"
-        log_success "WordPress exclusions configured"
+        log_success "WordPress exclusions configured for wp-test"
+    fi
+
+    # Apply to system nginx
+    if [ -f /etc/nginx/nginx.conf ]; then
+        local nginx_conf_d="/etc/nginx/conf.d"
+        if [ -d "$nginx_conf_d" ]; then
+            sudo cp "${TEMPLATE_DIR}/wordpress-exclusions.conf" "$nginx_conf_d/" 2>/dev/null || true
+            log_success "WordPress exclusions configured for system nginx"
+        fi
     fi
 }
 
