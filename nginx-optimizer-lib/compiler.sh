@@ -35,6 +35,9 @@ compile_nginx_with_brotli() {
     log_info "Downloading Brotli module..."
     download_brotli_module
 
+    log_info "Building Brotli library..."
+    build_brotli_library
+
     log_info "Configuring nginx..."
     configure_nginx
 
@@ -51,10 +54,10 @@ install_build_dependencies() {
     if command -v apt-get &>/dev/null; then
         # Ubuntu/Debian
         sudo apt-get update
-        sudo apt-get install -y build-essential libpcre3-dev zlib1g-dev libssl-dev git
+        sudo apt-get install -y build-essential libpcre3-dev zlib1g-dev libssl-dev git cmake
     elif command -v brew &>/dev/null; then
         # macOS
-        brew install pcre zlib openssl git
+        brew install pcre zlib openssl git cmake
     else
         log_error "Unsupported platform for auto-compilation"
         exit 1
@@ -71,6 +74,55 @@ download_nginx_source() {
 
 download_brotli_module() {
     git clone --recurse-submodules https://github.com/google/ngx_brotli.git
+}
+
+build_brotli_library() {
+    log_info "Building Brotli library..."
+
+    cd ngx_brotli/deps/brotli || {
+        log_error "Brotli source not found"
+        return 1
+    }
+
+    # Create build directory
+    mkdir -p out && cd out
+
+    # Build using cmake if available, otherwise use manual approach
+    if command -v cmake &>/dev/null; then
+        cmake -DCMAKE_BUILD_TYPE=Release \
+              -DBUILD_SHARED_LIBS=OFF \
+              -DCMAKE_C_FLAGS="-fPIC" \
+              -DCMAKE_INSTALL_PREFIX=./installed \
+              ..
+        make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
+    else
+        # Fallback: manual compilation
+        log_info "cmake not found, using manual build..."
+        cd ..
+
+        # Compile brotli common
+        gcc -c -fPIC -O2 -I./c/include \
+            c/common/*.c
+        ar rcs out/libbrotlicommon.a *.o
+        rm -f *.o
+
+        # Compile brotli encoder
+        gcc -c -fPIC -O2 -I./c/include \
+            c/enc/*.c
+        ar rcs out/libbrotlienc.a *.o
+        rm -f *.o
+
+        # Compile brotli decoder
+        gcc -c -fPIC -O2 -I./c/include \
+            c/dec/*.c
+        ar rcs out/libbrotlidec.a *.o
+        rm -f *.o
+    fi
+
+    # Return to nginx source directory
+    cd "$NGINX_BUILD_DIR"/nginx-* || exit 1
+
+    log_success "Brotli library built successfully"
 }
 
 configure_nginx() {
