@@ -347,8 +347,9 @@ apply_http3_system() {
                 continue
             fi
 
-            # Skip if no SSL configured (HTTP/3 requires SSL)
-            if ! grep -q "listen.*443.*ssl" "$site_conf" 2>/dev/null; then
+            # Skip if no UNCOMMENTED SSL configured (HTTP/3 requires SSL)
+            # Use grep to find uncommented listen 443 ssl lines
+            if ! grep -v '^\s*#' "$site_conf" 2>/dev/null | grep -q "listen.*443.*ssl"; then
                 log_info "No SSL config, skipping: $(basename "$site_conf")"
                 continue
             fi
@@ -364,14 +365,22 @@ apply_http3_system() {
                 quic_directive_v6="listen [::]:443 quic;"
             fi
 
-            # Use sed to inject HTTP/3 after SSL listen directives
+            # Use awk to inject HTTP/3 after SSL listen directives
             # Handle both IPv4 and IPv6 listen directives
+            # Skip commented lines
+
+            # Backup this specific file first
+            local file_backup="${site_conf}.http3bak"
+            sudo cp "$site_conf" "$file_backup"
 
             # Create temp file with injections
             sudo awk -v quic="$quic_directive" -v quic_v6="$quic_directive_v6" '
             {
                 line = $0
                 print line
+
+                # Skip commented lines
+                if (line ~ /^[[:space:]]*#/) next
 
                 # After "listen 443 ssl" (IPv4), add quic
                 if (line ~ /listen[[:space:]]+443[[:space:]]+ssl/ && line !~ /\[::\]/) {
@@ -385,6 +394,15 @@ apply_http3_system() {
             }' "$site_conf" | sudo tee "${site_conf}.tmp" > /dev/null
 
             sudo mv "${site_conf}.tmp" "$site_conf"
+
+            # Test this specific config
+            if nginx -t 2>&1 | grep -q "test failed\|emerg"; then
+                log_error "HTTP/3 injection failed for $(basename "$site_conf"), restoring..."
+                sudo mv "$file_backup" "$site_conf"
+                continue
+            fi
+
+            sudo rm -f "$file_backup"
             log_success "HTTP/3 injected into: $(basename "$site_conf")"
         done
     else
