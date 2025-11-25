@@ -495,7 +495,8 @@ check_brotli_module() {
 
 create_compression_template() {
     cat > "${TEMPLATE_DIR}/compression.conf" << 'EOF'
-# Compression Configuration
+# Brotli Compression Configuration
+# Note: Gzip is typically already configured in nginx.conf
 
 # Brotli dynamic compression
 brotli on;
@@ -516,36 +517,8 @@ brotli_types
     image/svg+xml
     image/x-icon;
 
-# Brotli static pre-compressed files
+# Brotli static pre-compressed files (serve .br files if available)
 brotli_static on;
-
-# Gzip fallback for older browsers
-gzip on;
-gzip_vary on;
-gzip_comp_level 6;
-gzip_min_length 1000;
-gzip_proxied any;
-
-# Note: gzip_types may already be defined in your main nginx config or proxy.conf
-# Comment out or remove this section if you see "duplicate MIME type" warnings
-# Uncomment only the additional types not already in your config
-# gzip_types
-#     text/plain
-#     text/css
-#     text/xml
-#     text/javascript
-#     application/json
-#     application/javascript
-#     application/x-javascript
-#     application/xml
-#     application/xml+rss
-#     application/vnd.ms-fontobject
-#     application/x-font-ttf
-#     font/opentype
-#     image/svg+xml
-#     image/x-icon;
-
-gzip_disable "msie6";
 EOF
 
     log_info "Created compression template"
