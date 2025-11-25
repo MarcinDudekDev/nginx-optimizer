@@ -29,6 +29,13 @@ purge_cached_templates() {
     for template in "${templates[@]}"; do
         local template_path="${TEMPLATE_DIR}/${template}"
         if [ -f "$template_path" ]; then
+            # Don't purge if template is referenced by includes in sites-enabled
+            if [ -d "/etc/nginx/sites-enabled" ]; then
+                if grep -rq "include.*${template}" /etc/nginx/sites-enabled/ 2>/dev/null; then
+                    log_info "Keeping $template (in use by sites-enabled)"
+                    continue
+                fi
+            fi
             rm -f "$template_path"
             purged=$((purged + 1))
         fi
@@ -38,6 +45,29 @@ purge_cached_templates() {
         log_info "Purged $purged cached template(s)"
     else
         log_info "No cached templates to purge"
+    fi
+}
+
+ensure_referenced_templates() {
+    # If includes exist in sites-enabled but templates don't, recreate them
+    if [ ! -d "/etc/nginx/sites-enabled" ]; then
+        return
+    fi
+
+    # Check for security-headers.conf references
+    if grep -rq "include.*security-headers.conf" /etc/nginx/sites-enabled/ 2>/dev/null; then
+        if [ ! -f "${TEMPLATE_DIR}/security-headers.conf" ]; then
+            log_info "Recreating security-headers.conf (referenced by includes)"
+            create_security_template
+        fi
+    fi
+
+    # Check for wordpress-exclusions.conf references
+    if grep -rq "include.*wordpress-exclusions.conf" /etc/nginx/sites-enabled/ 2>/dev/null; then
+        if [ ! -f "${TEMPLATE_DIR}/wordpress-exclusions.conf" ]; then
+            log_info "Recreating wordpress-exclusions.conf (referenced by includes)"
+            create_wordpress_exclusions_template
+        fi
     fi
 }
 
@@ -98,6 +128,9 @@ apply_optimizations() {
 
     # Purge cached templates to avoid stale config issues
     purge_cached_templates
+
+    # Ensure templates exist if referenced by includes in sites-enabled
+    ensure_referenced_templates
 
     log_info "Applying optimizations..."
 
