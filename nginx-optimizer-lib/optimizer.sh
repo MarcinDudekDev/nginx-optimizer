@@ -333,17 +333,43 @@ apply_http3_system() {
         return
     fi
 
-    # Add HTTP/3 configuration to main nginx.conf or site configs
-    # This is a simplified version - production should be more careful
-    local nginx_conf="/etc/nginx/nginx.conf"
+    # Auto-inject HTTP/3 into server blocks
+    if [ -d "/etc/nginx/sites-enabled" ]; then
+        log_info "Auto-injecting HTTP/3 into server blocks..."
 
-    if grep -q "listen.*quic" "$nginx_conf"; then
-        log_info "HTTP/3 already configured"
-        return
+        local first_site=true
+        for site_conf in /etc/nginx/sites-enabled/*; do
+            [ -f "$site_conf" ] || continue
+
+            # Skip if already has HTTP/3
+            if grep -q "listen.*quic" "$site_conf" 2>/dev/null; then
+                log_info "Already has HTTP/3: $(basename "$site_conf")"
+                continue
+            fi
+
+            # Skip if no SSL configured (HTTP/3 requires SSL)
+            if ! grep -q "listen.*443.*ssl" "$site_conf" 2>/dev/null; then
+                log_info "No SSL config, skipping: $(basename "$site_conf")"
+                continue
+            fi
+
+            # Only use reuseport on first site to avoid conflicts
+            if [ "$first_site" = true ]; then
+                sudo sed -i "/listen.*443.*ssl/a\\    listen 443 quic reuseport;" "$site_conf"
+                first_site=false
+            else
+                sudo sed -i "/listen.*443.*ssl/a\\    listen 443 quic;" "$site_conf"
+            fi
+
+            # Add Alt-Svc header for HTTP/3 discovery
+            sudo sed -i "/server[[:space:]]*{/a\\    add_header Alt-Svc 'h3=\":443\"; ma=86400' always;" "$site_conf"
+
+            log_success "HTTP/3 injected into: $(basename "$site_conf")"
+        done
+    else
+        log_success "HTTP/3 configuration template ready"
+        log_info "Manual step: Add HTTP/3 listen directives to your server blocks"
     fi
-
-    log_success "HTTP/3 configuration template ready"
-    log_info "Manual step: Add HTTP/3 listen directives to your server blocks"
 }
 
 ################################################################################
