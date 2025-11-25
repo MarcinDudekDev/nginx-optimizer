@@ -6,6 +6,8 @@
 
 NGINX_BUILD_DIR="${DATA_DIR}/nginx-build"
 NGINX_BACKUP_DIR="${DATA_DIR}/nginx-backup"
+NGINX_VERSION="1.25.3"
+NGINX_SRC_DIR=""  # Set during download
 
 ################################################################################
 # Brotli Compilation Functions
@@ -65,11 +67,10 @@ install_build_dependencies() {
 }
 
 download_nginx_source() {
-    local nginx_version="1.25.3"
-
-    wget "http://nginx.org/download/nginx-${nginx_version}.tar.gz"
-    tar -xzf "nginx-${nginx_version}.tar.gz"
-    cd "nginx-${nginx_version}" || exit 1
+    wget "http://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz"
+    tar -xzf "nginx-${NGINX_VERSION}.tar.gz"
+    NGINX_SRC_DIR="${NGINX_BUILD_DIR}/nginx-${NGINX_VERSION}"
+    cd "$NGINX_SRC_DIR" || exit 1
 }
 
 download_brotli_module() {
@@ -120,7 +121,7 @@ build_brotli_library() {
     fi
 
     # Return to nginx source directory
-    cd "$NGINX_BUILD_DIR"/nginx-* || exit 1
+    cd "$NGINX_SRC_DIR" || exit 1
 
     log_success "Brotli library built successfully"
 }
