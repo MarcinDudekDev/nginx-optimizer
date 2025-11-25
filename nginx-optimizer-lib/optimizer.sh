@@ -485,7 +485,8 @@ optimize_brotli() {
 
 check_brotli_module() {
     if command -v nginx &>/dev/null; then
-        if nginx -V 2>&1 | grep -q "http_brotli"; then
+        # Check for ngx_brotli module (compiled from source)
+        if nginx -V 2>&1 | grep -qi "brotli"; then
             return 0
         fi
     fi
