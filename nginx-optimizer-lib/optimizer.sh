@@ -29,12 +29,14 @@ purge_cached_templates() {
         local template_path="${TEMPLATE_DIR}/${template}"
         if [ -f "$template_path" ]; then
             rm -f "$template_path"
-            ((purged++))
+            purged=$((purged + 1))
         fi
     done
 
     if [ $purged -gt 0 ]; then
         log_info "Purged $purged cached template(s)"
+    else
+        log_info "No cached templates to purge"
     fi
 }
 
