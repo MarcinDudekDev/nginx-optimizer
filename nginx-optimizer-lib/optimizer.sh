@@ -353,17 +353,46 @@ apply_http3_system() {
                 continue
             fi
 
-            # Only use reuseport on first site to avoid conflicts
+            # Determine quic directive (reuseport only on first site)
+            local quic_directive
             if [ "$first_site" = true ]; then
-                sudo sed -i "/listen.*443.*ssl/a\\    listen 443 quic reuseport;" "$site_conf"
+                quic_directive="listen 443 quic reuseport;"
                 first_site=false
             else
-                sudo sed -i "/listen.*443.*ssl/a\\    listen 443 quic;" "$site_conf"
+                quic_directive="listen 443 quic;"
             fi
 
-            # Add Alt-Svc header for HTTP/3 discovery
-            sudo sed -i "/server[[:space:]]*{/a\\    add_header Alt-Svc 'h3=\":443\"; ma=86400' always;" "$site_conf"
+            # Use awk to inject HTTP/3 only into server blocks that have SSL
+            # This avoids adding to HTTP-only redirect blocks
+            sudo awk -v quic="$quic_directive" '
+            BEGIN { in_ssl_server = 0; injected = 0; brace_count = 0 }
+            {
+                print $0
 
+                # Track server block entry
+                if (/server[[:space:]]*\{/) {
+                    brace_count = 1
+                    in_ssl_server = 0
+                    injected = 0
+                }
+                # Track braces
+                else if (in_ssl_server || brace_count > 0) {
+                    gsub(/[^{}]/, "", $0)
+                    brace_count += gsub(/\{/, "{")
+                    brace_count -= gsub(/\}/, "}")
+                    if (brace_count == 0) in_ssl_server = 0
+                }
+
+                # Detect SSL listen directive and inject after it
+                if (/listen[[:space:]].*443.*ssl/ && !injected) {
+                    print "    " quic
+                    print "    add_header Alt-Svc '\''h3=\":443\"; ma=86400'\'' always;"
+                    injected = 1
+                    in_ssl_server = 1
+                }
+            }' "$site_conf" | sudo tee "${site_conf}.tmp" > /dev/null
+
+            sudo mv "${site_conf}.tmp" "$site_conf"
             log_success "HTTP/3 injected into: $(basename "$site_conf")"
         done
     else
