@@ -190,8 +190,10 @@ list_nginx_instances() {
 check_nginx_compiled() {
     local pattern="$1"
     if command -v nginx &>/dev/null; then
-        nginx -T 2>/dev/null | grep -q "$pattern"
-        return $?
+        # Use subshell to avoid pipefail issues with set -euo pipefail
+        if ( set +o pipefail; nginx -T 2>/dev/null | grep -q "$pattern" ); then
+            return 0
+        fi
     fi
     return 1
 }
