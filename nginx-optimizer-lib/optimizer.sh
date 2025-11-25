@@ -354,41 +354,33 @@ apply_http3_system() {
             fi
 
             # Determine quic directive (reuseport only on first site)
-            local quic_directive
+            local quic_directive quic_directive_v6
             if [ "$first_site" = true ]; then
                 quic_directive="listen 443 quic reuseport;"
+                quic_directive_v6="listen [::]:443 quic reuseport;"
                 first_site=false
             else
                 quic_directive="listen 443 quic;"
+                quic_directive_v6="listen [::]:443 quic;"
             fi
 
-            # Use awk to inject HTTP/3 only into server blocks that have SSL
-            # This avoids adding to HTTP-only redirect blocks
-            sudo awk -v quic="$quic_directive" '
-            BEGIN { in_ssl_server = 0; injected = 0; brace_count = 0 }
+            # Use sed to inject HTTP/3 after SSL listen directives
+            # Handle both IPv4 and IPv6 listen directives
+
+            # Create temp file with injections
+            sudo awk -v quic="$quic_directive" -v quic_v6="$quic_directive_v6" '
             {
-                print $0
+                line = $0
+                print line
 
-                # Track server block entry
-                if (/server[[:space:]]*\{/) {
-                    brace_count = 1
-                    in_ssl_server = 0
-                    injected = 0
-                }
-                # Track braces
-                else if (in_ssl_server || brace_count > 0) {
-                    gsub(/[^{}]/, "", $0)
-                    brace_count += gsub(/\{/, "{")
-                    brace_count -= gsub(/\}/, "}")
-                    if (brace_count == 0) in_ssl_server = 0
-                }
-
-                # Detect SSL listen directive and inject after it
-                if (/listen[[:space:]].*443.*ssl/ && !injected) {
+                # After "listen 443 ssl" (IPv4), add quic
+                if (line ~ /listen[[:space:]]+443[[:space:]]+ssl/ && line !~ /\[::\]/) {
                     print "    " quic
                     print "    add_header Alt-Svc '\''h3=\":443\"; ma=86400'\'' always;"
-                    injected = 1
-                    in_ssl_server = 1
+                }
+                # After "listen [::]:443 ssl" (IPv6), add quic for IPv6
+                else if (line ~ /listen[[:space:]]+\[::\]:443[[:space:]]+ssl/) {
+                    print "    " quic_v6
                 }
             }' "$site_conf" | sudo tee "${site_conf}.tmp" > /dev/null
 
