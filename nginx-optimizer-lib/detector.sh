@@ -241,6 +241,13 @@ check_brotli_enabled() {
         return 0
     fi
 
+    # Check if wp-test-proxy uses brotli-enabled image
+    if command -v docker &>/dev/null; then
+        if docker ps --filter "name=wp-test-proxy" --format "{{.Image}}" 2>/dev/null | grep -q "brotli"; then
+            return 0
+        fi
+    fi
+
     return 1
 }
 

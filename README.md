@@ -32,6 +32,23 @@ source ~/.zshrc
 ✅ **Auto-Update Bot Blocker** - Keep malicious bot lists current
 ✅ **Comprehensive Backups** - Timestamped snapshots with rollback
 
+## Known Limitations
+
+### HTTP/3 and Self-Signed Certificates
+
+The nginx-optimizer correctly applies HTTP/3 (QUIC) configuration and the server properly sends the `alt-svc: h3=":443"` header. However, modern browsers (Chrome, Brave, Safari) enforce a security restriction that prevents HTTP/3 connections when using self-signed or mkcert-generated certificates.
+
+**Key Points:**
+- HTTP/3 configuration IS applied correctly by the optimizer
+- The server advertises HTTP/3 support via `alt-svc` header
+- Browsers refuse to upgrade to HTTP/3 with self-signed/mkcert certificates for security reasons
+- This is a browser security restriction, NOT a configuration issue
+- HTTP/3 WILL work in production with proper CA-signed certificates (Let's Encrypt, etc.)
+- For local development, HTTP/2 is the maximum protocol version achievable in most browsers
+- Firefox can be configured to allow HTTP/3 with self-signed certificates via `about:config` (set `network.http.http3.enable_0rtt` and related flags) for testing purposes
+
+**Verification:** You can confirm HTTP/3 is configured correctly by checking response headers (`alt-svc: h3=":443"`) even though the connection remains on HTTP/2 in local development environments.
+
 ## Quick Start
 
 ### Analyze Current Setup

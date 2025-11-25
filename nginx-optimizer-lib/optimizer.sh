@@ -200,6 +200,13 @@ EOF
     cp "${TEMPLATE_DIR}/http3-quic.conf" "$proxy_conf_dir/"
 
     log_success "HTTP/3 configured for $site"
+
+    # Check if this is a local development environment
+    if [[ "$site" =~ \.(loc|local|test|localhost)$ ]]; then
+        log_warn "HTTP/3 configured but browsers block it with self-signed certs"
+        log_info "HTTP/3 will work in production with CA-signed certificates"
+        log_info "Local development will use HTTP/2 (this is expected)"
+    fi
 }
 
 apply_http3_system() {

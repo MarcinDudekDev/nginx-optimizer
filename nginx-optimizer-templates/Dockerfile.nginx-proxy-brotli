@@ -1,0 +1,94 @@
+# Custom nginx-proxy with Brotli compression support
+# Drop-in replacement for jwilder/nginx-proxy
+#
+# Build: docker build -t nginx-proxy-brotli -f Dockerfile.nginx-proxy-brotli .
+# Use:   Replace jwilder/nginx-proxy with nginx-proxy-brotli in wp-test
+
+FROM nginxproxy/nginx-proxy:1.6-alpine
+
+LABEL maintainer="nginx-optimizer"
+LABEL description="nginx-proxy with Brotli compression support"
+
+# Install build dependencies
+RUN apk add --no-cache --virtual .build-deps \
+    git \
+    gcc \
+    libc-dev \
+    make \
+    pcre-dev \
+    zlib-dev \
+    linux-headers \
+    gnupg \
+    libxslt-dev \
+    gd-dev \
+    geoip-dev \
+    brotli-dev
+
+# Get nginx version and download matching source
+RUN NGINX_VERSION=$(nginx -v 2>&1 | sed -n 's/.*nginx\/\([0-9.]*\).*/\1/p') \
+    && echo "Building for nginx $NGINX_VERSION" \
+    && wget -q http://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz \
+    && tar -xzf nginx-${NGINX_VERSION}.tar.gz \
+    && rm nginx-${NGINX_VERSION}.tar.gz
+
+# Clone ngx_brotli module
+RUN git clone --recurse-submodules https://github.com/google/ngx_brotli.git /tmp/ngx_brotli
+
+# Build Brotli as dynamic module
+RUN NGINX_VERSION=$(nginx -v 2>&1 | sed -n 's/.*nginx\/\([0-9.]*\).*/\1/p') \
+    && cd nginx-${NGINX_VERSION} \
+    && ./configure --with-compat --add-dynamic-module=/tmp/ngx_brotli \
+    && make modules \
+    && cp objs/ngx_http_brotli_filter_module.so /usr/lib/nginx/modules/ \
+    && cp objs/ngx_http_brotli_static_module.so /usr/lib/nginx/modules/ \
+    && cd / \
+    && rm -rf nginx-${NGINX_VERSION}
+
+# Clean up build dependencies
+RUN apk del .build-deps \
+    && rm -rf /tmp/ngx_brotli \
+    && rm -rf /var/cache/apk/*
+
+# Create Brotli configuration
+RUN mkdir -p /etc/nginx/conf.d && cat > /etc/nginx/conf.d/brotli.conf << 'EOF'
+# Brotli Compression Configuration
+
+# Load Brotli modules (must be in main nginx.conf, added below)
+# load_module /usr/lib/nginx/modules/ngx_http_brotli_filter_module.so;
+# load_module /usr/lib/nginx/modules/ngx_http_brotli_static_module.so;
+
+# Brotli dynamic compression
+brotli on;
+brotli_comp_level 6;
+brotli_types
+    text/plain
+    text/css
+    text/xml
+    text/javascript
+    application/json
+    application/javascript
+    application/x-javascript
+    application/xml
+    application/xml+rss
+    application/vnd.ms-fontobject
+    application/x-font-ttf
+    font/opentype
+    image/svg+xml
+    image/x-icon;
+
+# Brotli static pre-compressed files
+brotli_static on;
+EOF
+
+# Add module loading to nginx.conf (at the very beginning)
+RUN sed -i '1i load_module /usr/lib/nginx/modules/ngx_http_brotli_filter_module.so;' /etc/nginx/nginx.conf \
+    && sed -i '2i load_module /usr/lib/nginx/modules/ngx_http_brotli_static_module.so;' /etc/nginx/nginx.conf
+
+# Verify modules load correctly
+RUN nginx -t
+
+EXPOSE 80 443 443/udp
+
+# Use the original entrypoint from nginx-proxy
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["forego", "start", "-r"]
