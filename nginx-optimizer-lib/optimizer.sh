@@ -799,9 +799,54 @@ apply_security_config() {
         return
     fi
 
-    # Apply to wp-test (server context template)
+    # Apply to wp-test - use consolidated vhost default template
+    # nginx-proxy includes EITHER site-specific OR default, not both
+    # So we: 1) Deploy default template, 2) Update site-specific files to include default
     if [ -d "$WP_TEST_NGINX" ]; then
-        cp "${TEMPLATE_DIR}/security-headers.conf" "${WP_TEST_NGINX}/conf.d/"
+        local vhost_dir="${WP_TEST_NGINX}/vhost.d"
+        local vhost_default="${vhost_dir}/default"
+        local consolidated_template="${TEMPLATE_DIR}/wp-test-vhost-default.conf"
+
+        mkdir -p "$vhost_dir"
+
+        # Deploy consolidated template to default
+        if [ -f "$consolidated_template" ]; then
+            cp "$consolidated_template" "$vhost_default"
+            log_success "Security template deployed to vhost.d/default"
+        else
+            log_warn "Consolidated template not found, using fallback"
+            cp "${TEMPLATE_DIR}/security-headers.conf" "${WP_TEST_NGINX}/conf.d/"
+        fi
+
+        # Update site-specific files to include default
+        # nginx-proxy uses site-specific file INSTEAD of default if it exists
+        for site_file in "$vhost_dir"/*; do
+            [ -f "$site_file" ] || continue
+            local filename=$(basename "$site_file")
+
+            # Skip default, default_location, and hidden files
+            [[ "$filename" == "default" ]] && continue
+            [[ "$filename" == "default_location" ]] && continue
+            [[ "$filename" == .* ]] && continue
+            [[ -d "$site_file" ]] && continue
+
+            # Check if already includes default
+            if grep -q "include.*/vhost.d/default" "$site_file" 2>/dev/null; then
+                log_info "Site $filename already includes default"
+                continue
+            fi
+
+            # Add include directive at the beginning
+            log_info "Updating $filename to include default..."
+            local temp_file=$(mktemp)
+            echo "# Include default security headers" > "$temp_file"
+            echo "include /etc/nginx/vhost.d/default;" >> "$temp_file"
+            echo "" >> "$temp_file"
+            cat "$site_file" >> "$temp_file"
+            mv "$temp_file" "$site_file"
+            log_success "Updated $filename"
+        done
+
         log_success "Security configured for wp-test"
     fi
 
