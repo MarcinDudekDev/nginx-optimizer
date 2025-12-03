@@ -40,6 +40,7 @@ NC='\033[0m' # No Color
 # Options
 DRY_RUN=false
 FORCE=false
+QUIET=false
 SPECIFIC_FEATURE=""
 EXCLUDE_FEATURE=""
 CUSTOM_BACKUP_DIR=""
@@ -59,11 +60,19 @@ log() {
 }
 
 log_info() {
-    echo -e "${BLUE}[INFO]${NC} $*" | tee -a "${LOG_FILE}"
+    if [ "$QUIET" = false ]; then
+        echo -e "${BLUE}[INFO]${NC} $*" | tee -a "${LOG_FILE}"
+    else
+        echo "[INFO] $*" >> "${LOG_FILE}"
+    fi
 }
 
 log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $*" | tee -a "${LOG_FILE}"
+    if [ "$QUIET" = false ]; then
+        echo -e "${GREEN}[SUCCESS]${NC} $*" | tee -a "${LOG_FILE}"
+    else
+        echo "[SUCCESS] $*" >> "${LOG_FILE}"
+    fi
 }
 
 log_warn() {
@@ -146,6 +155,7 @@ COMMANDS:
 OPTIONS:
     --dry-run                   Show what would be done without applying
     --force                     Skip confirmations
+    -q, --quiet                 Suppress informational output (for scripting)
     --feature <name>            Apply specific feature only
     --exclude <name>            Exclude specific feature
     --backup-dir <path>         Custom backup directory
@@ -367,6 +377,10 @@ parse_arguments() {
                 FORCE=true
                 shift
                 ;;
+            -q|--quiet)
+                QUIET=true
+                shift
+                ;;
             --feature)
                 if [ -z "${2:-}" ] || [[ "$2" == -* ]]; then
                     log_error "--feature requires a value"
@@ -423,19 +437,24 @@ parse_arguments() {
 ################################################################################
 
 main() {
-    echo ""
-    echo "╔════════════════════════════════════════════════════════════╗"
-    echo "║          nginx-optimizer v${VERSION}                           ║"
-    echo "╚════════════════════════════════════════════════════════════╝"
-    echo ""
-
-    # Initialize
+    # Initialize directories first (needed for logging)
     init_directories
+
+    # Parse arguments early to know if quiet mode is enabled
+    parse_arguments "$@"
+
+    # Show banner unless quiet mode
+    if [ "$QUIET" = false ]; then
+        echo ""
+        echo "╔════════════════════════════════════════════════════════════╗"
+        echo "║          nginx-optimizer v${VERSION}                           ║"
+        echo "╚════════════════════════════════════════════════════════════╝"
+        echo ""
+    fi
+
+    # Check prerequisites and load libraries
     check_prerequisites
     source_libraries
-
-    # Parse arguments
-    parse_arguments "$@"
 
     # Execute command
     case "$COMMAND" in
