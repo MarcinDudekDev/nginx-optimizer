@@ -4,8 +4,12 @@
 # optimizer.sh - Core Optimization Logic
 ################################################################################
 
-# Track applied optimizations
-declare -a APPLIED_OPTIMIZATIONS
+# Track applied optimizations (initialized empty for set -u compatibility)
+declare -a APPLIED_OPTIMIZATIONS=()
+
+reset_applied_optimizations() {
+    APPLIED_OPTIMIZATIONS=()
+}
 
 ################################################################################
 # Cache Management
@@ -126,6 +130,9 @@ apply_optimizations() {
     local specific_feature="$2"
     local exclude_feature="$3"
 
+    # Reset tracking
+    reset_applied_optimizations
+
     # Purge cached templates to avoid stale config issues
     purge_cached_templates
 
@@ -161,41 +168,43 @@ apply_optimizations() {
     log_info "Features to apply: ${features[*]}"
     echo ""
 
-    # Apply each feature
+    # Apply each feature (with common aliases)
     for feature in "${features[@]}"; do
         case "$feature" in
-            http3)
+            http3|quic)
                 optimize_http3 "$target_site"
                 ;;
-            fastcgi-cache)
+            fastcgi-cache|fastcgi|cache)
                 optimize_fastcgi_cache "$target_site"
                 ;;
             redis)
                 optimize_redis "$target_site"
                 ;;
-            brotli)
+            brotli|compression)
                 optimize_brotli "$target_site"
                 ;;
-            security)
+            security|headers)
                 optimize_security "$target_site"
                 ;;
-            wordpress)
+            wordpress|wp)
                 optimize_wordpress "$target_site"
                 ;;
-            opcache)
+            opcache|php)
                 optimize_opcache "$target_site"
                 ;;
             *)
                 log_warn "Unknown feature: $feature"
+                log_info "Valid features: http3, fastcgi-cache, redis, brotli, security, wordpress, opcache"
                 ;;
         esac
     done
 
     echo ""
-    log_info "Applied ${#APPLIED_OPTIMIZATIONS[@]} optimization(s)"
+    local applied_count=${#APPLIED_OPTIMIZATIONS[@]:-0}
+    log_info "Applied ${applied_count} optimization(s)"
 
     # Show what was applied
-    if [ ${#APPLIED_OPTIMIZATIONS[@]} -gt 0 ]; then
+    if [ "$applied_count" -gt 0 ]; then
         echo ""
         echo "Applied Optimizations:"
         for opt in "${APPLIED_OPTIMIZATIONS[@]}"; do
