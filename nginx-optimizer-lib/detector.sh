@@ -198,6 +198,72 @@ check_nginx_compiled() {
     return 1
 }
 
+# Analyze nginx config inside a Docker container using docker exec
+analyze_docker_container() {
+    local container="$1"
+
+    if [ -z "$container" ]; then
+        log_error "Container name required"
+        return 1
+    fi
+
+    # Check if container is running
+    if ! docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^${container}$"; then
+        log_warn "Container '$container' is not running"
+        return 1
+    fi
+
+    log_info "Analyzing Docker container: $container"
+
+    # Try to get nginx config from container
+    local config
+    config=$(docker exec "$container" nginx -T 2>/dev/null) || {
+        log_warn "  Could not retrieve nginx config from container"
+        echo -e "    ${YELLOW}⚠ nginx -T failed in container${NC}"
+        return 1
+    }
+
+    # Check each optimization
+    if echo "$config" | grep -qiE "listen.*quic|http3"; then
+        echo -e "    ${GREEN}✓ HTTP/3 QUIC${NC}"
+    else
+        echo -e "    ${YELLOW}✗ HTTP/3 QUIC${NC}"
+    fi
+
+    if echo "$config" | grep -qi "fastcgi_cache"; then
+        echo -e "    ${GREEN}✓ FastCGI Cache${NC}"
+    else
+        echo -e "    ${YELLOW}✗ FastCGI Cache${NC}"
+    fi
+
+    if echo "$config" | grep -qi "brotli"; then
+        echo -e "    ${GREEN}✓ Brotli Compression${NC}"
+    else
+        echo -e "    ${YELLOW}✗ Brotli Compression${NC}"
+    fi
+
+    if echo "$config" | grep -qi "gzip on"; then
+        echo -e "    ${GREEN}✓ Gzip Compression${NC}"
+    else
+        echo -e "    ${YELLOW}✗ Gzip Compression${NC}"
+    fi
+
+    if echo "$config" | grep -qi "Strict-Transport-Security"; then
+        echo -e "    ${GREEN}✓ Security Headers (HSTS)${NC}"
+    else
+        echo -e "    ${YELLOW}✗ Security Headers (HSTS)${NC}"
+    fi
+
+    if echo "$config" | grep -qi "limit_req"; then
+        echo -e "    ${GREEN}✓ Rate Limiting${NC}"
+    else
+        echo -e "    ${YELLOW}✗ Rate Limiting${NC}"
+    fi
+
+    echo ""
+    return 0
+}
+
 check_http3_enabled() {
     local config_file="$1"
 
@@ -444,9 +510,10 @@ analyze_optimizations() {
                 analyze_config_file "$path" "System Nginx"
                 ;;
             docker)
-                log_info "Docker container: $name"
-                echo -e "    ${YELLOW}⚠ Manual inspection required for Docker containers${NC}"
-                echo ""
+                analyze_docker_container "$name" || {
+                    log_warn "Could not analyze Docker container: $name"
+                    echo ""
+                }
                 ;;
         esac
     done
