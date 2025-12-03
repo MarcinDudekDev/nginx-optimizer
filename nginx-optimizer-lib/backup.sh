@@ -25,38 +25,58 @@ create_backup() {
 
     log_info "Creating backup: $CURRENT_BACKUP_DIR"
 
+    local backup_failed=false
+
     # Backup system nginx
     if [ -d /etc/nginx ]; then
         log_info "Backing up system nginx config..."
         mkdir -p "${CURRENT_BACKUP_DIR}/nginx"
-        rsync -a /etc/nginx/ "${CURRENT_BACKUP_DIR}/nginx/" 2>/dev/null || true
+        if ! rsync -a /etc/nginx/ "${CURRENT_BACKUP_DIR}/nginx/" 2>/dev/null; then
+            log_warn "Could not backup /etc/nginx (permission denied?)"
+        fi
     fi
 
     if [ -d /usr/local/etc/nginx ]; then
         log_info "Backing up homebrew nginx config..."
         mkdir -p "${CURRENT_BACKUP_DIR}/nginx-homebrew"
-        rsync -a /usr/local/etc/nginx/ "${CURRENT_BACKUP_DIR}/nginx-homebrew/" 2>/dev/null || true
+        if ! rsync -a /usr/local/etc/nginx/ "${CURRENT_BACKUP_DIR}/nginx-homebrew/" 2>/dev/null; then
+            log_warn "Could not backup /usr/local/etc/nginx"
+        fi
     fi
 
-    # Backup wp-test nginx
+    # Backup wp-test nginx (critical for wp-test sites)
     if [ -d "$WP_TEST_NGINX" ]; then
         log_info "Backing up wp-test nginx config..."
         mkdir -p "${CURRENT_BACKUP_DIR}/wp-test-nginx"
-        rsync -a "$WP_TEST_NGINX/" "${CURRENT_BACKUP_DIR}/wp-test-nginx/" 2>/dev/null || true
+        if ! rsync -a "$WP_TEST_NGINX/" "${CURRENT_BACKUP_DIR}/wp-test-nginx/"; then
+            log_error "CRITICAL: Failed to backup wp-test nginx config"
+            backup_failed=true
+        fi
     fi
 
-    # Backup specific wp-test site
+    # Backup specific wp-test site (critical if specified)
     if [ -n "$target_site" ] && [ -d "$WP_TEST_SITES/$target_site" ]; then
         log_info "Backing up wp-test site: $target_site..."
         mkdir -p "${CURRENT_BACKUP_DIR}/wp-test-sites/${target_site}"
-        rsync -a "$WP_TEST_SITES/$target_site/" "${CURRENT_BACKUP_DIR}/wp-test-sites/${target_site}/" 2>/dev/null || true
+        if ! rsync -a "$WP_TEST_SITES/$target_site/" "${CURRENT_BACKUP_DIR}/wp-test-sites/${target_site}/"; then
+            log_error "CRITICAL: Failed to backup wp-test site: $target_site"
+            backup_failed=true
+        fi
     fi
 
-    # Backup PHP configs
+    # Backup PHP configs (non-critical)
     if [ -d /etc/php ]; then
         log_info "Backing up PHP configs..."
         mkdir -p "${CURRENT_BACKUP_DIR}/php"
-        rsync -a /etc/php/ "${CURRENT_BACKUP_DIR}/php/" 2>/dev/null || true
+        if ! rsync -a /etc/php/ "${CURRENT_BACKUP_DIR}/php/" 2>/dev/null; then
+            log_warn "Could not backup /etc/php (permission denied?)"
+        fi
+    fi
+
+    # Fail if critical backups failed
+    if [ "$backup_failed" = true ]; then
+        log_error "Backup failed - aborting optimization"
+        return 1
     fi
 
     # Create metadata file

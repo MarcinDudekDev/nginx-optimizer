@@ -368,14 +368,26 @@ parse_arguments() {
                 shift
                 ;;
             --feature)
+                if [ -z "${2:-}" ] || [[ "$2" == -* ]]; then
+                    log_error "--feature requires a value"
+                    exit 1
+                fi
                 SPECIFIC_FEATURE="$2"
                 shift 2
                 ;;
             --exclude)
+                if [ -z "${2:-}" ] || [[ "$2" == -* ]]; then
+                    log_error "--exclude requires a value"
+                    exit 1
+                fi
                 EXCLUDE_FEATURE="$2"
                 shift 2
                 ;;
             --backup-dir)
+                if [ -z "${2:-}" ] || [[ "$2" == -* ]]; then
+                    log_error "--backup-dir requires a path"
+                    exit 1
+                fi
                 CUSTOM_BACKUP_DIR="$2"
                 shift 2
                 ;;
