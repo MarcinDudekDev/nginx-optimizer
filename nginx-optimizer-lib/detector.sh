@@ -387,44 +387,58 @@ analyze_config_file() {
 
     if check_http3_enabled "$config_file"; then
         echo -e "    ${GREEN}✓ HTTP/3 QUIC${NC}"
+        increment_score 1
     else
         echo -e "    ${YELLOW}✗ HTTP/3 QUIC${NC}"
+        increment_score 0
     fi
 
     if check_fastcgi_cache_enabled "$config_file"; then
         echo -e "    ${GREEN}✓ FastCGI Cache${NC}"
+        increment_score 1
     else
         echo -e "    ${YELLOW}✗ FastCGI Cache${NC}"
+        increment_score 0
     fi
 
     if check_brotli_enabled "$config_file"; then
         echo -e "    ${GREEN}✓ Brotli Compression${NC}"
+        increment_score 1
     else
         echo -e "    ${YELLOW}✗ Brotli Compression${NC}"
+        increment_score 0
     fi
 
     if check_gzip_enabled "$config_file"; then
         echo -e "    ${GREEN}✓ Gzip Compression${NC}"
+        increment_score 1
     else
         echo -e "    ${YELLOW}✗ Gzip Compression${NC}"
+        increment_score 0
     fi
 
     if check_security_headers "$config_file"; then
         echo -e "    ${GREEN}✓ Security Headers${NC}"
+        increment_score 1
     else
         echo -e "    ${YELLOW}✗ Security Headers${NC}"
+        increment_score 0
     fi
 
     if check_rate_limiting "$config_file"; then
         echo -e "    ${GREEN}✓ Rate Limiting${NC}"
+        increment_score 1
     else
         echo -e "    ${YELLOW}✗ Rate Limiting${NC}"
+        increment_score 0
     fi
 
     if check_wordpress_exclusions "$config_file"; then
         echo -e "    ${GREEN}✓ WordPress Exclusions${NC}"
+        increment_score 1
     else
         echo -e "    ${YELLOW}✗ WordPress Exclusions${NC}"
+        increment_score 0
     fi
 
     echo ""
@@ -453,8 +467,10 @@ analyze_wp_test_site() {
     # Check Redis
     if check_redis_configured "$site_dir"; then
         echo -e "    ${GREEN}✓ Redis Configured${NC}"
+        increment_score 1
     else
         echo -e "    ${YELLOW}✗ Redis Not Configured${NC}"
+        increment_score 0
     fi
 
     # Check for docker-compose
@@ -467,6 +483,9 @@ analyze_wp_test_site() {
 
 analyze_optimizations() {
     local target_site="$1"
+
+    # Reset score tracking
+    reset_score
 
     echo ""
     echo "═══════════════════════════════════════════════════════════"
@@ -496,15 +515,84 @@ analyze_optimizations() {
                 ;;
         esac
     done
+
+    # Show optimization score summary
+    echo "═══════════════════════════════════════════════════════════"
+    echo "Optimization Score:"
+    echo -n "  "
+    show_optimization_score "$SCORE_ENABLED" "$SCORE_TOTAL"
+    echo ""
+    echo "Legend:"
+    echo -e "  ${GREEN}✓${NC} = Enabled"
+    echo -e "  ${YELLOW}✗${NC} = Missing (can be optimized)"
+    echo "═══════════════════════════════════════════════════════════"
+}
+
+# Global score counters
+SCORE_ENABLED=0
+SCORE_TOTAL=0
+
+reset_score() {
+    SCORE_ENABLED=0
+    SCORE_TOTAL=0
+}
+
+increment_score() {
+    local enabled=$1
+    SCORE_TOTAL=$((SCORE_TOTAL + 1))
+    if [ "$enabled" = "1" ]; then
+        SCORE_ENABLED=$((SCORE_ENABLED + 1))
+    fi
+}
+
+show_optimization_score() {
+    local enabled_count=$1
+    local total_count=$2
+    local bar_width=10
+
+    if [ "$total_count" -eq 0 ]; then
+        echo -e "${YELLOW}No optimizations checked${NC}"
+        return
+    fi
+
+    local percent=$(( (enabled_count * 100 + total_count / 2) / total_count ))
+    local filled=$(( (enabled_count * bar_width) / total_count ))
+    local full_block="█"
+    local empty_block="░"
+    local bar=""
+
+    for ((i = 0; i < bar_width; i++)); do
+        if (( i < filled )); then
+            bar+=$full_block
+        else
+            bar+=$empty_block
+        fi
+    done
+
+    local color
+    if (( percent >= 80 )); then
+        color=$GREEN
+    elif (( percent >= 50 )); then
+        color=$YELLOW
+    else
+        color=$RED
+    fi
+
+    echo -e "${color}[${bar}] ${enabled_count}/${total_count} (${percent}%)${NC}"
 }
 
 show_status() {
     local target_site="$1"
 
+    reset_score
     detect_nginx_instances "$target_site"
     analyze_optimizations "$target_site"
 
     echo "═══════════════════════════════════════════════════════════"
+    echo "Optimization Score:"
+    echo -n "  "
+    show_optimization_score "$SCORE_ENABLED" "$SCORE_TOTAL"
+    echo ""
     echo "Legend:"
     echo -e "  ${GREEN}✓${NC} = Enabled"
     echo -e "  ${YELLOW}✗${NC} = Missing (can be optimized)"
