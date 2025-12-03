@@ -444,19 +444,50 @@ analyze_config_file() {
     echo ""
 }
 
+# Track already analyzed config files to avoid redundant analysis
+declare -a ANALYZED_FILES=()
+
+is_already_analyzed() {
+    local file="$1"
+    # Handle empty array case for set -u compatibility
+    if [ ${#ANALYZED_FILES[@]} -eq 0 ]; then
+        return 1
+    fi
+    for analyzed in "${ANALYZED_FILES[@]}"; do
+        if [ "$analyzed" = "$file" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+mark_as_analyzed() {
+    local file="$1"
+    ANALYZED_FILES+=("$file")
+}
+
+reset_analyzed_files() {
+    ANALYZED_FILES=()
+}
+
 analyze_wp_test_site() {
     local site_name="$1"
     local site_dir="$2"
 
     log_info "Analyzing wp-test site: $site_name"
 
-    # Check nginx proxy config
+    # Check nginx proxy config (only analyze once across all sites)
     local proxy_conf="${WP_TEST_NGINX}/proxy.conf"
     if [ -f "$proxy_conf" ]; then
-        analyze_config_file "$proxy_conf" "Proxy Config"
+        if is_already_analyzed "$proxy_conf"; then
+            log_info "  (Proxy config already analyzed above)"
+        else
+            analyze_config_file "$proxy_conf" "Shared Proxy Config"
+            mark_as_analyzed "$proxy_conf"
+        fi
     fi
 
-    # Check vhost config
+    # Check vhost config (unique per site)
     local vhost_conf="${WP_TEST_NGINX}/vhost.d/${site_name}"
     if [ -f "$vhost_conf" ]; then
         analyze_config_file "$vhost_conf" "VHost Config ($site_name)"
@@ -484,8 +515,9 @@ analyze_wp_test_site() {
 analyze_optimizations() {
     local target_site="$1"
 
-    # Reset score tracking
+    # Reset tracking for new analysis
     reset_score
+    reset_analyzed_files
 
     echo ""
     echo "═══════════════════════════════════════════════════════════"
