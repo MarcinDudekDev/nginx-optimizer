@@ -25,6 +25,30 @@ WP_TEST_SITES="${HOME}/.wp-test/sites"
 # Store detected instances as "type:name:path" entries
 DETECTED_INSTANCES=()
 
+# Cache for nginx -T output (expensive operation)
+NGINX_COMPILED_CONFIG=""
+NGINX_CONFIG_CACHED=false
+
+################################################################################
+# Input Validation Functions
+################################################################################
+
+validate_site_name() {
+    local name="$1"
+    # Only allow alphanumeric, dots, hyphens, and underscores
+    if [[ ! "$name" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+        log_error "Invalid site name '$name': contains illegal characters"
+        log_error "Site names can only contain: a-z, A-Z, 0-9, dots, hyphens, underscores"
+        return 1
+    fi
+    # Prevent path traversal attempts
+    if [[ "$name" == *".."* ]] || [[ "$name" == "/"* ]]; then
+        log_error "Invalid site name '$name': path traversal not allowed"
+        return 1
+    fi
+    return 0
+}
+
 ################################################################################
 # Detection Functions
 ################################################################################
@@ -139,6 +163,10 @@ detect_nginx_instances() {
     DETECTED_INSTANCES=()
 
     if [ -n "$target_site" ]; then
+        # Validate site name to prevent path traversal
+        if ! validate_site_name "$target_site"; then
+            exit 1
+        fi
         # Check if it's a wp-test site
         if [ -d "$WP_TEST_SITES/$target_site" ]; then
             add_instance "wp_test" "$target_site" "$WP_TEST_SITES/$target_site"
@@ -186,12 +214,30 @@ list_nginx_instances() {
 # Configuration Analysis Functions
 ################################################################################
 
-# Check compiled nginx config directly (more reliable than caching large output)
+# Get cached nginx -T output (runs once, reuses thereafter)
+get_nginx_compiled_config() {
+    if [ "$NGINX_CONFIG_CACHED" = false ]; then
+        if command -v nginx &>/dev/null; then
+            NGINX_COMPILED_CONFIG=$(nginx -T 2>/dev/null || echo "")
+        fi
+        NGINX_CONFIG_CACHED=true
+    fi
+    echo "$NGINX_COMPILED_CONFIG"
+}
+
+# Reset nginx config cache (call at start of new analysis)
+reset_nginx_config_cache() {
+    NGINX_COMPILED_CONFIG=""
+    NGINX_CONFIG_CACHED=false
+}
+
+# Check compiled nginx config using cached output (performance optimization)
 check_nginx_compiled() {
     local pattern="$1"
-    if command -v nginx &>/dev/null; then
-        # Use subshell to avoid pipefail issues with set -euo pipefail
-        if ( set +o pipefail; nginx -T 2>/dev/null | grep -q "$pattern" ); then
+    local config
+    config=$(get_nginx_compiled_config)
+    if [ -n "$config" ]; then
+        if echo "$config" | grep -q "$pattern"; then
             return 0
         fi
     fi
