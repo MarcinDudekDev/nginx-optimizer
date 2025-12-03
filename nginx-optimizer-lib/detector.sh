@@ -445,6 +445,43 @@ check_redis_configured() {
     return 1
 }
 
+check_ocsp_stapling() {
+    local config_file="$1"
+
+    # Check compiled config first
+    if check_nginx_compiled "ssl_stapling on"; then
+        return 0
+    fi
+
+    # Fallback to file check
+    if [ -f "$config_file" ] && grep -q "ssl_stapling on" "$config_file" 2>/dev/null; then
+        return 0
+    fi
+
+    return 1
+}
+
+check_tls_versions() {
+    local config_file="$1"
+    local tls_versions=""
+
+    # Check for TLSv1.3 (modern)
+    if check_nginx_compiled "TLSv1.3" || ([ -f "$config_file" ] && grep -q "TLSv1.3" "$config_file" 2>/dev/null); then
+        tls_versions="1.3"
+    fi
+
+    # Check for TLSv1.2 (acceptable)
+    if check_nginx_compiled "TLSv1.2" || ([ -f "$config_file" ] && grep -q "TLSv1.2" "$config_file" 2>/dev/null); then
+        if [ -n "$tls_versions" ]; then
+            tls_versions="${tls_versions}, 1.2"
+        else
+            tls_versions="1.2"
+        fi
+    fi
+
+    echo "$tls_versions"
+}
+
 analyze_config_file() {
     local config_file="$1"
     local instance_name="$2"
@@ -505,6 +542,24 @@ analyze_config_file() {
     else
         echo -e "    ${YELLOW}✗ WordPress Exclusions${NC}"
         increment_score 0
+    fi
+
+    if check_ocsp_stapling "$config_file"; then
+        echo -e "    ${GREEN}✓ OCSP Stapling${NC}"
+    else
+        echo -e "    ${YELLOW}✗ OCSP Stapling${NC}"
+    fi
+
+    local tls_versions
+    tls_versions=$(check_tls_versions "$config_file")
+    if [ -n "$tls_versions" ]; then
+        if echo "$tls_versions" | grep -q "1.3"; then
+            echo -e "    ${GREEN}✓ TLS Versions: ${tls_versions}${NC}"
+        else
+            echo -e "    ${YELLOW}✓ TLS Versions: ${tls_versions} (1.3 recommended)${NC}"
+        fi
+    else
+        echo -e "    ${YELLOW}✗ TLS Versions: not configured${NC}"
     fi
 
     echo ""
