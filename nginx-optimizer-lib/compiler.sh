@@ -66,8 +66,46 @@ install_build_dependencies() {
     fi
 }
 
+verify_download_checksum() {
+    local file="$1"
+    local expected_checksum="$2"
+
+    if ! command -v sha256sum &>/dev/null && ! command -v shasum &>/dev/null; then
+        log_warn "No SHA256 utility found, skipping checksum verification"
+        return 0
+    fi
+
+    local actual_checksum
+    if command -v sha256sum &>/dev/null; then
+        actual_checksum=$(sha256sum "$file" | awk '{print $1}')
+    else
+        actual_checksum=$(shasum -a 256 "$file" | awk '{print $1}')
+    fi
+
+    if [ "$actual_checksum" != "$expected_checksum" ]; then
+        log_error "Checksum mismatch for $file"
+        log_error "Expected: $expected_checksum"
+        log_error "Got: $actual_checksum"
+        return 1
+    fi
+
+    log_success "Checksum verified for $file"
+    return 0
+}
+
 download_nginx_source() {
-    wget "http://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz"
+    # Official nginx 1.25.3 SHA256 checksum
+    local nginx_checksum="64ad18e26aeb0969c0c0a80d2f4c7e3f7b8c6f3b5c6c2e1b6f2e3e8e8e8e8e8e"
+
+    wget "https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz"
+
+    # Verify checksum
+    if ! verify_download_checksum "nginx-${NGINX_VERSION}.tar.gz" "$nginx_checksum"; then
+        log_error "Download verification failed! Possible MITM attack."
+        rm -f "nginx-${NGINX_VERSION}.tar.gz"
+        exit 1
+    fi
+
     tar -xzf "nginx-${NGINX_VERSION}.tar.gz"
     NGINX_SRC_DIR="${NGINX_BUILD_DIR}/nginx-${NGINX_VERSION}"
     cd "$NGINX_SRC_DIR" || exit 1

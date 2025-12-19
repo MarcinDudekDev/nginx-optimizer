@@ -47,6 +47,25 @@ CUSTOM_BACKUP_DIR=""
 TARGET_SITE=""
 
 ################################################################################
+# Lock File Management
+################################################################################
+
+LOCK_FILE="${DATA_DIR}/nginx-optimizer.lock"
+
+acquire_lock() {
+    exec 200>"$LOCK_FILE"
+    if ! flock -n 200; then
+        log_error "Another instance is running (lock: $LOCK_FILE)"
+        exit 1
+    fi
+}
+
+release_lock() {
+    flock -u 200 2>/dev/null || true
+    rm -f "$LOCK_FILE" 2>/dev/null || true
+}
+
+################################################################################
 # Logging Functions
 ################################################################################
 
@@ -442,6 +461,10 @@ main() {
 
     # Parse arguments early to know if quiet mode is enabled
     parse_arguments "$@"
+
+    # Acquire lock to prevent race conditions
+    acquire_lock
+    trap release_lock EXIT
 
     # Show banner unless quiet mode
     if [ "$QUIET" = false ]; then

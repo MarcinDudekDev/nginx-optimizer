@@ -12,6 +12,177 @@ reset_applied_optimizations() {
 }
 
 ################################################################################
+# Security: Path and File Validation
+################################################################################
+
+# Validate nginx config paths to prevent directory traversal
+validate_nginx_config_path() {
+    local path="$1"
+    local resolved=$(realpath "$path" 2>/dev/null)
+
+    # Must resolve successfully
+    [[ -z "$resolved" ]] && return 1
+
+    # Must be within allowed directories
+    case "$resolved" in
+        /etc/nginx/*|/usr/local/etc/nginx/*|"$HOME"/.wp-test/*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Check if config file is safe to modify (not symlink to outside nginx dirs)
+is_safe_config_file() {
+    local file="$1"
+
+    # Must exist
+    [[ ! -e "$file" ]] && return 1
+
+    # If regular file, check path
+    if [[ -f "$file" ]] && [[ ! -L "$file" ]]; then
+        validate_nginx_config_path "$file"
+        return $?
+    fi
+
+    # If symlink, resolve and validate target
+    if [[ -L "$file" ]]; then
+        local target=$(readlink -f "$file" 2>/dev/null)
+        [[ -z "$target" ]] && return 1
+
+        # Target must be regular file
+        [[ ! -f "$target" ]] && return 1
+
+        # Validate target path
+        validate_nginx_config_path "$target"
+        return $?
+    fi
+
+    # Not a regular file or symlink
+    return 1
+}
+
+################################################################################
+# Atomic File Operations & Transaction Helpers
+################################################################################
+
+# Transaction state tracking
+declare -a TRANSACTION_FILES=()
+declare -a TRANSACTION_TEMPS=()
+TRANSACTION_ACTIVE=false
+
+# Atomic write: write to temp file in same dir, then atomically mv
+# Usage: atomic_write_file <target_path> <content_or_source_file>
+atomic_write_file() {
+    local target_path="$1"
+    local source="$2"
+
+    # Create temp file in same directory as target (ensures same filesystem)
+    local target_dir=$(dirname "$target_path")
+    local temp_file=$(mktemp "${target_dir}/.nginx-opt.XXXXXX")
+
+    # Copy content to temp file
+    if [ -f "$source" ]; then
+        # Source is a file, copy it
+        cp "$source" "$temp_file"
+    else
+        # Source is content, write it
+        echo "$source" > "$temp_file"
+    fi
+
+    # Preserve permissions if target exists
+    if [ -f "$target_path" ]; then
+        chmod --reference="$target_path" "$temp_file" 2>/dev/null || \
+        chown --reference="$target_path" "$temp_file" 2>/dev/null || true
+    fi
+
+    # Atomic move (POSIX guarantees atomicity on same filesystem)
+    mv "$temp_file" "$target_path"
+}
+
+# Start transaction: prepare to modify multiple files atomically
+transaction_start() {
+    TRANSACTION_FILES=()
+    TRANSACTION_TEMPS=()
+    TRANSACTION_ACTIVE=true
+}
+
+# Add file to transaction: creates temp copy
+# Usage: transaction_add_file <original_path>
+transaction_add_file() {
+    local original_path="$1"
+
+    if [ ! "$TRANSACTION_ACTIVE" = true ]; then
+        log_error "No active transaction. Call transaction_start first."
+        return 1
+    fi
+
+    # Create temp file in same directory
+    local target_dir=$(dirname "$original_path")
+    local temp_file=$(mktemp "${target_dir}/.nginx-opt-txn.XXXXXX")
+
+    # Copy original if it exists
+    if [ -f "$original_path" ]; then
+        cp "$original_path" "$temp_file"
+        chmod --reference="$original_path" "$temp_file" 2>/dev/null || true
+        if command -v chown &>/dev/null; then
+            chown --reference="$original_path" "$temp_file" 2>/dev/null || true
+        fi
+    fi
+
+    # Track this file
+    TRANSACTION_FILES+=("$original_path")
+    TRANSACTION_TEMPS+=("$temp_file")
+
+    # Return temp file path
+    echo "$temp_file"
+}
+
+# Commit transaction: atomically move all temp files to originals
+transaction_commit() {
+    if [ ! "$TRANSACTION_ACTIVE" = true ]; then
+        log_error "No active transaction to commit"
+        return 1
+    fi
+
+    local count=${#TRANSACTION_FILES[@]}
+
+    # Atomically move all files
+    for ((i=0; i<count; i++)); do
+        local original="${TRANSACTION_FILES[$i]}"
+        local temp="${TRANSACTION_TEMPS[$i]}"
+
+        if [ -f "$temp" ]; then
+            mv "$temp" "$original"
+        fi
+    done
+
+    # Clear transaction state
+    TRANSACTION_FILES=()
+    TRANSACTION_TEMPS=()
+    TRANSACTION_ACTIVE=false
+
+    return 0
+}
+
+# Rollback transaction: delete all temp files, abort changes
+transaction_rollback() {
+    if [ ! "$TRANSACTION_ACTIVE" = true ]; then
+        return 0
+    fi
+
+    # Delete all temp files
+    for temp in "${TRANSACTION_TEMPS[@]}"; do
+        rm -f "$temp"
+    done
+
+    # Clear transaction state
+    TRANSACTION_FILES=()
+    TRANSACTION_TEMPS=()
+    TRANSACTION_ACTIVE=false
+
+    log_info "Transaction rolled back"
+}
+
+################################################################################
 # Cache Management
 ################################################################################
 
@@ -89,33 +260,122 @@ inject_server_includes() {
         return 1
     fi
 
-    local injected=0
+    # Phase 1: Collect files to modify
+    local -a files_to_modify=()
     for site_conf in "$sites_dir"/*; do
         [ -f "$site_conf" ] || continue
 
-        # Skip if already includes this file
-        if grep -q "include.*${include_name}" "$site_conf" 2>/dev/null; then
+        # SECURITY: Validate file is safe to modify
+        if ! is_safe_config_file "$site_conf"; then
+            log_warn "Skipping unsafe config file: $(basename "$site_conf")"
+            continue
+        fi
+
+        # SECURITY FIX: Check for exact include directive (anchored regex)
+        # Use proper regex to avoid false positives
+        if grep -qE "^[[:space:]]*include[[:space:]]+[^#]*${include_name}[[:space:]]*;" "$site_conf" 2>/dev/null; then
             log_info "Already included in: $(basename "$site_conf")"
             continue
         fi
 
-        # Check if file contains server block
-        if ! grep -q "server[[:space:]]*{" "$site_conf" 2>/dev/null; then
-            log_info "No server block in: $(basename "$site_conf")"
+        # SECURITY FIX: Check if file contains UNCOMMENTED server block
+        # Skip commented lines to prevent injection into comments
+        if ! grep -vE '^[[:space:]]*#' "$site_conf" 2>/dev/null | grep -q "server[[:space:]]*{"; then
+            log_info "No uncommented server block in: $(basename "$site_conf")"
             continue
         fi
 
-        # Inject include after first "server {" line
-        sudo sed -i "/server[[:space:]]*{/a\\    include ${include_file};" "$site_conf"
-
-        log_success "Injected into: $(basename "$site_conf")"
-        injected=$((injected + 1))
+        files_to_modify+=("$site_conf")
     done
+
+    if [ ${#files_to_modify[@]} -eq 0 ]; then
+        log_info "No new injections needed"
+        return 0
+    fi
+
+    # Phase 2: Start transaction and prepare all changes
+    transaction_start
+
+    local -a temp_files=()
+    for site_conf in "${files_to_modify[@]}"; do
+        # Add to transaction
+        local temp_file=$(transaction_add_file "$site_conf")
+        temp_files+=("$temp_file")
+
+        # SECURITY FIX: Use awk to inject after first UNCOMMENTED server block
+        # This prevents injection into commented sections
+        awk -v include_line="    include ${include_file};" '
+        BEGIN { injected = 0 }
+        {
+            line = $0
+            print line
+
+            # Skip commented lines
+            if (line ~ /^[[:space:]]*#/) next
+
+            # Inject after first uncommented "server {"
+            if (!injected && line ~ /server[[:space:]]*\{/) {
+                print include_line
+                injected = 1
+            }
+        }' "$site_conf" > "${temp_file}.new"
+        mv "${temp_file}.new" "$temp_file"
+    done
+
+    # Phase 3: Validate with nginx -t (if possible)
+    # First commit to temp location for testing
+    local validation_failed=false
+    if command -v nginx &>/dev/null && [ -n "${files_to_modify[0]}" ]; then
+        # Create backup copies for validation test
+        for ((i=0; i<${#files_to_modify[@]}; i++)); do
+            local original="${files_to_modify[$i]}"
+            local temp="${temp_files[$i]}"
+            sudo cp "$original" "${original}.txn-backup" 2>/dev/null || true
+            sudo cp "$temp" "$original" 2>/dev/null || true
+        done
+
+        # Test nginx config
+        if ! sudo nginx -t 2>&1 | grep -q "test is successful"; then
+            log_error "nginx -t validation failed, rolling back changes"
+            validation_failed=true
+
+            # Restore backups
+            for original in "${files_to_modify[@]}"; do
+                sudo mv "${original}.txn-backup" "$original" 2>/dev/null || true
+            done
+        else
+            # Restore backups (we'll commit properly below)
+            for original in "${files_to_modify[@]}"; do
+                sudo mv "${original}.txn-backup" "$original" 2>/dev/null || true
+            done
+        fi
+    fi
+
+    # Phase 4: Commit or rollback
+    if [ "$validation_failed" = true ]; then
+        transaction_rollback
+        return 1
+    fi
+
+    # Commit transaction - atomically move all temp files
+    local injected=0
+    for ((i=0; i<${#files_to_modify[@]}; i++)); do
+        local original="${files_to_modify[$i]}"
+        local temp="${temp_files[$i]}"
+
+        # Atomic move with sudo if needed
+        if sudo mv "$temp" "$original" 2>/dev/null; then
+            log_success "Injected into: $(basename "$original")"
+            injected=$((injected + 1))
+        else
+            log_error "Failed to commit: $(basename "$original")"
+        fi
+    done
+
+    transaction_commit
 
     if [ $injected -gt 0 ]; then
         log_info "Injected into $injected server block(s)"
-    else
-        log_info "No new injections needed"
     fi
 
     return 0
@@ -608,30 +868,25 @@ apply_redis_wp_test() {
         return
     fi
 
-    # Check if Redis already exists
-    if grep -q "redis:" "$compose_file"; then
-        log_info "Redis already configured for $site"
-        return
+    # Use safe YAML manipulation function
+    local redis_definition="image: redis:alpine
+container_name: redis-${site}
+command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+networks:
+  - default"
+
+    if safe_add_docker_service "$compose_file" "redis" "$redis_definition"; then
+        log_success "Redis configured for $site"
+        log_info "Next steps:"
+        log_info "  1. Restart containers: cd $WP_TEST_SITES/$site && docker-compose up -d"
+        log_info "  2. Install Redis Object Cache plugin in WordPress"
+        log_info "  3. Add to wp-config.php:"
+        log_info "     define('WP_REDIS_HOST', 'redis');"
+        log_info "     define('WP_REDIS_PORT', 6379);"
+    else
+        log_error "Failed to add Redis service to docker-compose.yml"
+        return 1
     fi
-
-    # Add Redis service to docker-compose.yml
-    cat >> "$compose_file" << EOF
-
-  redis:
-    image: redis:alpine
-    container_name: redis-${site}
-    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
-    networks:
-      - default
-EOF
-
-    log_success "Redis configured for $site"
-    log_info "Next steps:"
-    log_info "  1. Restart containers: cd $WP_TEST_SITES/$site && docker-compose up -d"
-    log_info "  2. Install Redis Object Cache plugin in WordPress"
-    log_info "  3. Add to wp-config.php:"
-    log_info "     define('WP_REDIS_HOST', 'redis');"
-    log_info "     define('WP_REDIS_PORT', 6379);"
 }
 
 ################################################################################
@@ -763,14 +1018,49 @@ optimize_security() {
 }
 
 create_security_template() {
+    # Determine which CSP to use based on --strict-csp flag or STRICT_CSP env var
+    local use_strict_csp="${STRICT_CSP:-false}"
+
+    # Create STRICT CSP template (proper security without unsafe-*)
+    cat > "${TEMPLATE_DIR}/csp-strict.conf" << 'EOF'
+# Strict Content Security Policy (Recommended for new sites)
+# WARNING: This may break sites that rely on inline scripts/styles
+# Test thoroughly before deploying to production
+
+add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; font-src 'self'; connect-src 'self'; frame-ancestors 'self';" always;
+EOF
+
+    # Create LEGACY CSP template (permissive for compatibility)
+    cat > "${TEMPLATE_DIR}/csp-legacy.conf" << 'EOF'
+# Legacy Content Security Policy (Permissive for compatibility)
+# WARNING: Using 'unsafe-inline', 'unsafe-eval', and 'unsafe-hashes' together
+# defeats the purpose of CSP and provides minimal XSS protection.
+#
+# This is provided for legacy compatibility only. For new sites, use csp-strict.conf
+# To use strict CSP: Set STRICT_CSP=true or use --strict-csp flag
+
+add_header Content-Security-Policy "default-src 'self' 'unsafe-inline' 'unsafe-eval' https: data: 'unsafe-hashes';" always;
+EOF
+
+    # Choose which CSP to include in main security-headers.conf
+    local csp_include="csp-legacy.conf"
+    if [ "$use_strict_csp" = "true" ]; then
+        csp_include="csp-strict.conf"
+        log_info "Using STRICT CSP (proper XSS protection)"
+    else
+        log_warn "Using LEGACY CSP with unsafe-* directives (weak XSS protection)"
+        log_info "For better security, use: STRICT_CSP=true or --strict-csp flag"
+        log_info "Test strict CSP first: include ${TEMPLATE_DIR}/csp-strict.conf;"
+    fi
+
     # Full template for wp-test (inside server blocks)
-    cat > "${TEMPLATE_DIR}/security-headers.conf" << 'EOF'
+    cat > "${TEMPLATE_DIR}/security-headers.conf" << EOF
 # Security Headers Configuration (for server context)
 
 # Rate limiting zones (must be in http context - add to main config)
-# limit_req_zone $binary_remote_addr zone=wp_login:10m rate=15r/m;
-# limit_req_zone $binary_remote_addr zone=wp_general:10m rate=30r/m;
-# limit_conn_zone $binary_remote_addr zone=conn_limit:10m;
+# limit_req_zone \$binary_remote_addr zone=wp_login:10m rate=15r/m;
+# limit_req_zone \$binary_remote_addr zone=wp_general:10m rate=30r/m;
+# limit_conn_zone \$binary_remote_addr zone=conn_limit:10m;
 
 # Security headers
 add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
@@ -780,8 +1070,10 @@ add_header X-XSS-Protection "1; mode=block" always;
 add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
 
-# CSP for frontend (less strict)
-add_header Content-Security-Policy "default-src 'self' 'unsafe-inline' 'unsafe-eval' https: data: 'unsafe-hashes';" always;
+# Content Security Policy
+# Choose between strict (secure) or legacy (compatible):
+# include ${TEMPLATE_DIR}/csp-strict.conf;  # Recommended for new sites
+include ${TEMPLATE_DIR}/${csp_include};      # Current selection
 EOF
 
     # HTTP context template for system nginx (conf.d)
@@ -795,7 +1087,7 @@ limit_req_zone $binary_remote_addr zone=wp_general:10m rate=30r/m;
 limit_conn_zone $binary_remote_addr zone=conn_limit:10m;
 EOF
 
-    log_info "Created security headers template"
+    log_info "Created security headers templates (strict + legacy CSP)"
 }
 
 apply_security_config() {

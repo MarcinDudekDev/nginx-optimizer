@@ -218,3 +218,195 @@ push_docker_image() {
 
     log_success "Image pushed to registry"
 }
+
+################################################################################
+# Safe Docker Compose YAML Manipulation
+################################################################################
+
+safe_add_docker_service() {
+    local compose_file="$1"
+    local service_name="$2"
+    local service_definition="$3"
+
+    if [ ! -f "$compose_file" ]; then
+        log_error "Compose file not found: $compose_file"
+        return 1
+    fi
+
+    log_info "Safely adding service '$service_name' to docker-compose.yml"
+
+    # Backup original file
+    local backup_file="${compose_file}.backup-$(date +%Y%m%d-%H%M%S)"
+    cp "$compose_file" "$backup_file"
+    log_info "Backup created: $backup_file"
+
+    # Try yq first (preferred method)
+    if command -v yq &>/dev/null; then
+        log_info "Using yq for YAML manipulation"
+
+        # Check if service already exists
+        if yq eval ".services.${service_name}" "$compose_file" | grep -qv "null"; then
+            log_warn "Service '$service_name' already exists in $compose_file"
+            rm "$backup_file"
+            return 0
+        fi
+
+        # Add service using yq
+        echo "$service_definition" | yq eval ".services.${service_name} = ." -i "$compose_file"
+
+    # Try Python yaml module as fallback
+    elif command -v python3 &>/dev/null && python3 -c "import yaml" 2>/dev/null; then
+        log_info "Using Python yaml module"
+
+        python3 << PYEOF
+import yaml
+import sys
+
+try:
+    with open('$compose_file', 'r') as f:
+        compose = yaml.safe_load(f) or {}
+
+    if 'services' not in compose:
+        compose['services'] = {}
+
+    if '$service_name' in compose['services']:
+        print("Service '$service_name' already exists", file=sys.stderr)
+        sys.exit(0)
+
+    # Parse service definition
+    service_def = yaml.safe_load('''$service_definition''')
+    compose['services']['$service_name'] = service_def
+
+    with open('$compose_file', 'w') as f:
+        yaml.dump(compose, f, default_flow_style=False, sort_keys=False)
+
+    sys.exit(0)
+except Exception as e:
+    print(f"Python YAML manipulation failed: {e}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+
+        if [ $? -ne 0 ]; then
+            log_error "Python YAML manipulation failed, falling back to bash"
+            cp "$backup_file" "$compose_file"
+        fi
+
+    # Fallback to careful bash parsing
+    else
+        log_warn "Neither yq nor Python yaml available, using bash fallback"
+
+        # Check if service already exists with proper YAML parsing
+        if grep -q "^[[:space:]]*${service_name}:" "$compose_file"; then
+            log_warn "Service '$service_name' already exists in $compose_file"
+            rm "$backup_file"
+            return 0
+        fi
+
+        # Check if services section exists
+        if ! grep -q "^services:" "$compose_file"; then
+            log_error "No 'services:' section found in $compose_file"
+            rm "$backup_file"
+            return 1
+        fi
+
+        # Ensure file ends with newline
+        if [ -n "$(tail -c 1 "$compose_file")" ]; then
+            echo "" >> "$compose_file"
+        fi
+
+        # Add service definition with proper indentation
+        cat >> "$compose_file" << EOF
+
+  ${service_name}:
+$(echo "$service_definition" | sed 's/^/    /')
+EOF
+    fi
+
+    # Validate the resulting YAML with docker-compose
+    if command -v docker-compose &>/dev/null; then
+        log_info "Validating docker-compose.yml syntax"
+
+        if docker-compose -f "$compose_file" config -q 2>/dev/null; then
+            log_success "YAML validation passed"
+            rm "$backup_file"
+            return 0
+        else
+            log_error "YAML validation failed, restoring backup"
+            cp "$backup_file" "$compose_file"
+            log_error "Backup file preserved at: $backup_file"
+            return 1
+        fi
+    elif command -v docker &>/dev/null && docker compose version &>/dev/null; then
+        log_info "Validating docker-compose.yml syntax (docker compose v2)"
+
+        if docker compose -f "$compose_file" config -q 2>/dev/null; then
+            log_success "YAML validation passed"
+            rm "$backup_file"
+            return 0
+        else
+            log_error "YAML validation failed, restoring backup"
+            cp "$backup_file" "$compose_file"
+            log_error "Backup file preserved at: $backup_file"
+            return 1
+        fi
+    else
+        log_warn "docker-compose not available, skipping validation"
+        log_warn "Backup preserved at: $backup_file"
+    fi
+
+    return 0
+}
+
+verify_docker_volume_mount() {
+    local container_name="$1"
+    local host_path="$2"
+    local container_path="$3"
+
+    if [ -z "$container_name" ] || [ -z "$host_path" ] || [ -z "$container_path" ]; then
+        log_error "verify_docker_volume_mount: missing arguments"
+        return 1
+    fi
+
+    # Check if container exists and is running
+    if ! docker ps --format '{{.Names}}' | grep -q "^${container_name}$"; then
+        log_warn "Container '$container_name' is not running"
+        return 1
+    fi
+
+    # Check if path is mounted by inspecting container
+    if docker inspect "$container_name" --format '{{range .Mounts}}{{.Source}}:{{.Destination}}{{"\n"}}{{end}}' | \
+       grep -q "${host_path}:${container_path}"; then
+        log_info "Volume mount verified: $host_path -> $container_path"
+        return 0
+    else
+        log_warn "Volume mount NOT found: $host_path -> $container_path"
+        log_info "Container mounts:"
+        docker inspect "$container_name" --format '{{range .Mounts}}  {{.Source}} -> {{.Destination}}{{"\n"}}{{end}}'
+        return 1
+    fi
+}
+
+verify_path_accessible_in_container() {
+    local container_name="$1"
+    local container_path="$2"
+
+    if [ -z "$container_name" ] || [ -z "$container_path" ]; then
+        log_error "verify_path_accessible_in_container: missing arguments"
+        return 1
+    fi
+
+    # Check if container exists and is running
+    if ! docker ps --format '{{.Names}}' | grep -q "^${container_name}$"; then
+        log_warn "Container '$container_name' is not running"
+        return 1
+    fi
+
+    # Check if path exists in container
+    if docker exec "$container_name" test -d "$container_path" 2>/dev/null; then
+        log_info "Path accessible in container: $container_path"
+        return 0
+    else
+        log_warn "Path NOT accessible in container: $container_path"
+        return 1
+    fi
+}

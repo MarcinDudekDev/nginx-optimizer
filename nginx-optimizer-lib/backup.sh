@@ -64,6 +64,23 @@ create_backup() {
         fi
     fi
 
+    # Backup all docker-compose.yml files from wp-test sites
+    if [ -d "$WP_TEST_SITES" ]; then
+        log_info "Backing up docker-compose.yml files from wp-test sites..."
+        mkdir -p "${CURRENT_BACKUP_DIR}/docker-compose-files"
+        local compose_count=0
+        for site_dir in "$WP_TEST_SITES"/*; do
+            if [ -d "$site_dir" ] && [ -f "$site_dir/docker-compose.yml" ]; then
+                local site_name=$(basename "$site_dir")
+                cp "$site_dir/docker-compose.yml" "${CURRENT_BACKUP_DIR}/docker-compose-files/${site_name}.yml"
+                compose_count=$((compose_count + 1))
+            fi
+        done
+        if [ $compose_count -gt 0 ]; then
+            log_info "Backed up $compose_count docker-compose.yml files"
+        fi
+    fi
+
     # Backup PHP configs (non-critical)
     if [ -d /etc/php ]; then
         log_info "Backing up PHP configs..."
@@ -104,6 +121,12 @@ create_backup_metadata() {
         php_version=$(php -v | head -1 | sed -n 's/^PHP \([0-9.]*\).*/\1/p')
     fi
 
+    # Count backed up docker-compose files
+    local compose_count=0
+    if [ -d "${CURRENT_BACKUP_DIR}/docker-compose-files" ]; then
+        compose_count=$(ls -1 "${CURRENT_BACKUP_DIR}/docker-compose-files" 2>/dev/null | wc -l)
+    fi
+
     cat > "$metadata_file" << EOF
 {
     "timestamp": "$(date '+%Y-%m-%d %H:%M:%S')",
@@ -111,7 +134,8 @@ create_backup_metadata() {
     "php_version": "$php_version",
     "target_site": "${TARGET_SITE:-all}",
     "hostname": "$(hostname)",
-    "user": "$(whoami)"
+    "user": "$(whoami)",
+    "docker_compose_files_backed_up": $compose_count
 }
 EOF
 
@@ -152,6 +176,23 @@ fi
 if [ -d "$BACKUP_DIR/wp-test-sites" ]; then
     echo "Restoring wp-test sites..."
     rsync -a "$BACKUP_DIR/wp-test-sites/" "$HOME/.wp-test/sites/"
+fi
+
+# Restore docker-compose files
+if [ -d "$BACKUP_DIR/docker-compose-files" ]; then
+    echo "Restoring docker-compose.yml files..."
+    for compose_file in "$BACKUP_DIR/docker-compose-files"/*.yml; do
+        if [ -f "$compose_file" ]; then
+            site_name=$(basename "$compose_file" .yml)
+            target_dir="$HOME/.wp-test/sites/$site_name"
+            if [ -d "$target_dir" ]; then
+                echo "  Restoring docker-compose.yml for $site_name"
+                cp "$compose_file" "$target_dir/docker-compose.yml"
+            else
+                echo "  Warning: Site directory not found for $site_name"
+            fi
+        fi
+    done
 fi
 
 # Restore PHP configs
@@ -281,20 +322,26 @@ cleanup_old_backups() {
 
     log_info "Cleaning up old backups (keeping last $keep_count)..."
 
-    local backup_count=$(ls -1 "$BACKUP_DIR" | wc -l)
+    # Count backups safely
+    local backup_count=0
+    while IFS= read -r -d '' _; do
+        ((backup_count++))
+    done < <(find "$BACKUP_DIR" -maxdepth 1 -mindepth 1 -type d -print0)
 
     if [ "$backup_count" -le "$keep_count" ]; then
         log_info "No cleanup needed ($backup_count backups)"
         return
     fi
 
-    # Remove oldest backups
-    local to_remove=$((backup_count - keep_count))
-
-    ls -1t "$BACKUP_DIR" | tail -$to_remove | while read -r old_backup; do
-        log_info "Removing old backup: $old_backup"
-        rm -rf "${BACKUP_DIR}/${old_backup}"
-    done
+    # Remove oldest (sort by mtime, skip newest keep_count)
+    find "$BACKUP_DIR" -maxdepth 1 -mindepth 1 -type d -printf '%T@ %p\0' | \
+        sort -z -n | \
+        head -z -n -"$keep_count" | \
+        while IFS= read -r -d '' line; do
+            local backup_path="${line#* }"
+            log_info "Removing old backup: $(basename "$backup_path")"
+            rm -rf "$backup_path"
+        done
 
     log_success "Cleanup complete"
 }
@@ -305,33 +352,51 @@ list_backups() {
     echo "Available Backups:"
     echo "═══════════════════════════════════════════════════════════"
 
-    if [ ! -d "$BACKUP_DIR" ] || [ -z "$(ls -A "$BACKUP_DIR" 2>/dev/null)" ]; then
+    if [ ! -d "$BACKUP_DIR" ]; then
         echo "  No backups found"
         echo ""
         return
     fi
 
-    for backup in $(ls -1t "$BACKUP_DIR"); do
-        local metadata_file="${BACKUP_DIR}/${backup}/backup-metadata.json"
+    # Check if any backups exist
+    local has_backups=false
+    while IFS= read -r -d '' _; do
+        has_backups=true
+        break
+    done < <(find "$BACKUP_DIR" -maxdepth 1 -mindepth 1 -type d -print0)
 
-        echo "  Backup: $backup"
-
-        if [ -f "$metadata_file" ]; then
-            local timestamp=$(jq -r '.timestamp' "$metadata_file" 2>/dev/null || echo "unknown")
-            local nginx_ver=$(jq -r '.nginx_version' "$metadata_file" 2>/dev/null || echo "unknown")
-            local target=$(jq -r '.target_site' "$metadata_file" 2>/dev/null || echo "unknown")
-
-            echo "    Time: $timestamp"
-            echo "    Nginx: $nginx_ver"
-            echo "    Target: $target"
-        fi
-
-        # Show size
-        local size=$(du -sh "${BACKUP_DIR}/${backup}" 2>/dev/null | cut -f1)
-        echo "    Size: $size"
-
+    if [ "$has_backups" = false ]; then
+        echo "  No backups found"
         echo ""
-    done
+        return
+    fi
+
+    # List backups sorted by modification time (newest first)
+    find "$BACKUP_DIR" -maxdepth 1 -mindepth 1 -type d -printf '%T@ %p\0' | \
+        sort -z -rn | \
+        while IFS= read -r -d '' line; do
+            local backup_path="${line#* }"
+            local backup=$(basename "$backup_path")
+            local metadata_file="${backup_path}/backup-metadata.json"
+
+            echo "  Backup: $backup"
+
+            if [ -f "$metadata_file" ]; then
+                local timestamp=$(jq -r '.timestamp' "$metadata_file" 2>/dev/null || echo "unknown")
+                local nginx_ver=$(jq -r '.nginx_version' "$metadata_file" 2>/dev/null || echo "unknown")
+                local target=$(jq -r '.target_site' "$metadata_file" 2>/dev/null || echo "unknown")
+
+                echo "    Time: $timestamp"
+                echo "    Nginx: $nginx_ver"
+                echo "    Target: $target"
+            fi
+
+            # Show size
+            local size=$(du -sh "$backup_path" 2>/dev/null | cut -f1)
+            echo "    Size: $size"
+
+            echo ""
+        done
 
     echo "═══════════════════════════════════════════════════════════"
     echo "Restore with: nginx-optimizer rollback <backup-name>"
