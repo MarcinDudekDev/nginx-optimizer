@@ -16,7 +16,7 @@
 set -euo pipefail
 
 # Script version
-VERSION="1.1.0"
+VERSION="1.2.0"
 
 # Directories
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -138,7 +138,7 @@ check_prerequisites() {
 }
 
 source_libraries() {
-    for lib in detector backup optimizer validator compiler docker monitoring benchmark; do
+    for lib in detector backup optimizer validator compiler docker monitoring benchmark honeypot; do
         lib_file="${LIB_DIR}/${lib}.sh"
         if [ -f "$lib_file" ]; then
             # shellcheck source=/dev/null
@@ -169,6 +169,9 @@ COMMANDS:
     status [site]               Show optimization status
     list                        List all detected nginx installations
     benchmark [site]            Run performance benchmarks
+    honeypot <site>             Deploy honeypot tarpit for site (traps bots)
+    honeypot-logs [hours]       Analyze honeypot logs (default: 24h)
+    honeypot-export             Export attacker IPs for blocklists
     help                        Show this help message
 
 OPTIONS:
@@ -188,6 +191,7 @@ FEATURES:
     security                    Security headers + rate limiting
     wordpress                   WordPress-specific exclusions
     opcache                     PHP OpCache optimization
+    honeypot                    Bot tarpit with canary tokens
 
 EXAMPLES:
     # Analyze all nginx instances
@@ -219,6 +223,15 @@ EXAMPLES:
 
     # Check optimization status
     nginx-optimizer status
+
+    # Deploy honeypot for a site
+    nginx-optimizer honeypot mysite.com
+
+    # Analyze honeypot activity (last 24h)
+    nginx-optimizer honeypot-logs
+
+    # Export attacker IPs for blocklist
+    nginx-optimizer honeypot-export
 
 ENVIRONMENT:
     Supports system nginx, Docker containers, and wp-test environments
@@ -375,6 +388,72 @@ cmd_compile() {
     fi
 }
 
+cmd_honeypot() {
+    if [ -z "$TARGET_SITE" ]; then
+        log_error "Site domain required for honeypot deployment"
+        log_info "Usage: nginx-optimizer honeypot <site-domain>"
+        exit 1
+    fi
+
+    log_info "Deploying honeypot tarpit for $TARGET_SITE..."
+
+    if type -t deploy_honeypot &>/dev/null; then
+        deploy_honeypot "$TARGET_SITE"
+
+        echo ""
+        log_info "Next steps:"
+        log_info "1. Add to your nginx site config:"
+        echo "   include ${TEMPLATE_DIR}/honeypot-tarpit.conf;"
+        echo ""
+        log_info "2. Test nginx config:"
+        echo "   sudo nginx -t"
+        echo ""
+        log_info "3. Reload nginx:"
+        echo "   sudo systemctl reload nginx"
+        echo ""
+        log_info "4. (Optional) Enable fail2ban integration:"
+        echo "   nginx-optimizer honeypot-fail2ban"
+    else
+        log_error "Honeypot library not loaded"
+        exit 1
+    fi
+}
+
+cmd_honeypot_logs() {
+    local hours="${TARGET_SITE:-24}"
+
+    log_info "Analyzing honeypot logs..."
+
+    if type -t analyze_honeypot_logs &>/dev/null; then
+        analyze_honeypot_logs "$hours"
+    else
+        log_error "Honeypot library not loaded"
+        exit 1
+    fi
+}
+
+cmd_honeypot_export() {
+    log_info "Exporting attacker IPs..."
+
+    if type -t export_attacker_ips &>/dev/null; then
+        export_attacker_ips
+    else
+        log_error "Honeypot library not loaded"
+        exit 1
+    fi
+}
+
+cmd_honeypot_fail2ban() {
+    log_info "Setting up fail2ban integration..."
+
+    if type -t create_fail2ban_config &>/dev/null; then
+        create_fail2ban_config
+    else
+        log_error "Honeypot library not loaded"
+        exit 1
+    fi
+}
+
 ################################################################################
 # Argument Parsing
 ################################################################################
@@ -384,7 +463,7 @@ parse_arguments() {
 
     while [ $# -gt 0 ]; do
         case "$1" in
-            analyze|optimize|compile|rollback|test|status|list|benchmark|help)
+            analyze|optimize|compile|rollback|test|status|list|benchmark|help|honeypot|honeypot-logs|honeypot-export|honeypot-fail2ban)
                 COMMAND="$1"
                 shift
                 ;;
@@ -504,6 +583,18 @@ main() {
             ;;
         benchmark)
             cmd_benchmark
+            ;;
+        honeypot)
+            cmd_honeypot
+            ;;
+        honeypot-logs)
+            cmd_honeypot_logs
+            ;;
+        honeypot-export)
+            cmd_honeypot_export
+            ;;
+        honeypot-fail2ban)
+            cmd_honeypot_fail2ban
             ;;
         help)
             show_help
