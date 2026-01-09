@@ -79,9 +79,6 @@ get_md5_hash() {
     fi
 }
 
-# Global token cache to prevent regeneration
-declare -A SITE_TOKENS_CACHE
-
 generate_site_canary_tokens() {
     local site_domain="$1"
     local force_regenerate="${2:-false}"
@@ -94,9 +91,12 @@ generate_site_canary_tokens() {
         echo '{"tokens": {}, "sites": {}}' > "$CANARY_TOKENS_FILE"
     fi
 
+    # File-based cache (bash 3.2 compatible)
+    local cache_file="${HONEYPOT_CONFIG_DIR}/.token-cache-$(echo "$site_domain" | tr '.' '_')"
+
     # Return cached tokens if already generated this session
-    if [[ -n "${SITE_TOKENS_CACHE[$site_domain]:-}" && "$force_regenerate" != "true" ]]; then
-        echo "${SITE_TOKENS_CACHE[$site_domain]}"
+    if [[ -f "$cache_file" && "$force_regenerate" != "true" ]]; then
+        cat "$cache_file"
         return 0
     fi
 
@@ -117,7 +117,7 @@ AWS_SECRET=$aws_secret
 DB_PASS=$db_pass
 API_KEY=$api_key
 CANARY_CALLBACK=$canary"
-            SITE_TOKENS_CACHE[$site_domain]="$result"
+            echo "$result" > "$cache_file"
             echo "$result"
             return 0
         fi
@@ -166,7 +166,7 @@ AWS_SECRET=$aws_secret
 DB_PASS=$db_pass
 API_KEY=$api_key
 CANARY_CALLBACK=$canary_callback"
-    SITE_TOKENS_CACHE[$site_domain]="$result"
+    echo "$result" > "$cache_file"
     echo "$result"
 }
 

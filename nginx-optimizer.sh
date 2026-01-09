@@ -53,16 +53,34 @@ TARGET_SITE=""
 LOCK_FILE="${DATA_DIR}/nginx-optimizer.lock"
 
 acquire_lock() {
-    exec 200>"$LOCK_FILE"
-    if ! flock -n 200; then
-        log_error "Another instance is running (lock: $LOCK_FILE)"
-        exit 1
+    # Portable lock using mkdir (atomic on all platforms)
+    if ! mkdir "$LOCK_FILE" 2>/dev/null; then
+        # Check if stale lock (process not running)
+        if [ -f "$LOCK_FILE/pid" ]; then
+            local old_pid
+            old_pid=$(cat "$LOCK_FILE/pid" 2>/dev/null)
+            if [ -n "$old_pid" ] && ! kill -0 "$old_pid" 2>/dev/null; then
+                # Stale lock, remove and retry
+                rm -rf "$LOCK_FILE"
+                mkdir "$LOCK_FILE" 2>/dev/null || {
+                    log_error "Another instance is running (lock: $LOCK_FILE)"
+                    exit 1
+                }
+            else
+                log_error "Another instance is running (lock: $LOCK_FILE)"
+                exit 1
+            fi
+        else
+            log_error "Another instance is running (lock: $LOCK_FILE)"
+            exit 1
+        fi
     fi
+    # Store our PID for stale lock detection
+    echo $$ > "$LOCK_FILE/pid"
 }
 
 release_lock() {
-    flock -u 200 2>/dev/null || true
-    rm -f "$LOCK_FILE" 2>/dev/null || true
+    rm -rf "$LOCK_FILE" 2>/dev/null || true
 }
 
 ################################################################################

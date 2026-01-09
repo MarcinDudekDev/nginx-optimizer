@@ -1,0 +1,69 @@
+# MVP CI Pipeline for nginx-optimizer
+# This is a minimal viable CI setup focused on cross-platform compatibility
+# Future iterations can add integration tests, Docker builds, etc.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Run shellcheck on main script
+        run: shellcheck --severity=warning nginx-optimizer.sh
+
+      - name: Run shellcheck on library files
+        run: shellcheck --severity=warning nginx-optimizer-lib/*.sh
+
+      - name: Run shellcheck on scripts
+        run: shellcheck --severity=warning scripts/*.sh 2>/dev/null || true
+
+      - name: Run shellcheck on templates
+        run: shellcheck --severity=warning nginx-optimizer-templates/*.sh 2>/dev/null || true
+
+  syntax-check:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show bash version
+        run: bash --version
+
+      - name: Check bash syntax on main script
+        run: bash -n nginx-optimizer.sh
+
+      - name: Check bash syntax on library files
+        run: |
+          for f in nginx-optimizer-lib/*.sh; do
+            echo "Checking $f..."
+            bash -n "$f"
+          done
+
+      - name: Check bash syntax on scripts
+        run: |
+          for f in scripts/*.sh; do
+            [ -f "$f" ] || continue
+            echo "Checking $f..."
+            bash -n "$f"
+          done
+
+      - name: Check bash syntax on templates
+        run: |
+          for f in nginx-optimizer-templates/*.sh; do
+            [ -f "$f" ] || continue
+            echo "Checking $f..."
+            bash -n "$f"
+          done

@@ -8,6 +8,32 @@
 CURRENT_BACKUP_DIR=""
 
 ################################################################################
+# Helper Functions
+################################################################################
+
+# Get directory modification time (cross-platform)
+# Returns epoch timestamp on stdout
+get_dir_mtime() {
+    local dir="$1"
+    local mtime
+
+    # Try BSD stat first (macOS)
+    if mtime=$(stat -f '%m' "$dir" 2>/dev/null); then
+        echo "$mtime"
+        return 0
+    fi
+
+    # Try GNU stat (Linux)
+    if mtime=$(stat -c '%Y' "$dir" 2>/dev/null); then
+        echo "$mtime"
+        return 0
+    fi
+
+    # Fallback to epoch 0
+    echo "0"
+}
+
+################################################################################
 # Backup Functions
 ################################################################################
 
@@ -334,11 +360,21 @@ cleanup_old_backups() {
     fi
 
     # Remove oldest (sort by mtime, skip newest keep_count)
-    find "$BACKUP_DIR" -maxdepth 1 -mindepth 1 -type d -printf '%T@ %p\0' | \
-        sort -z -n | \
-        head -z -n -"$keep_count" | \
-        while IFS= read -r -d '' line; do
-            local backup_path="${line#* }"
+    # Portable stat-based approach (BSD/GNU compatible)
+    local -a backups_with_mtime=()
+    for dir in "$BACKUP_DIR"/*/; do
+        [ -d "$dir" ] || continue
+        local mtime
+        mtime=$(get_dir_mtime "$dir")
+        backups_with_mtime+=("$mtime $dir")
+    done
+
+    # Sort by mtime (oldest first), remove old backups
+    local delete_count=$((backup_count - keep_count))
+    printf '%s\n' "${backups_with_mtime[@]}" | \
+        sort -n | \
+        head -n "$delete_count" | \
+        while IFS=' ' read -r mtime backup_path; do
             log_info "Removing old backup: $(basename "$backup_path")"
             rm -rf "$backup_path"
         done
@@ -372,19 +408,31 @@ list_backups() {
     fi
 
     # List backups sorted by modification time (newest first)
-    find "$BACKUP_DIR" -maxdepth 1 -mindepth 1 -type d -printf '%T@ %p\0' | \
-        sort -z -rn | \
-        while IFS= read -r -d '' line; do
-            local backup_path="${line#* }"
-            local backup=$(basename "$backup_path")
+    # Portable stat-based approach (BSD/GNU compatible)
+    local -a backups_with_mtime=()
+    for dir in "$BACKUP_DIR"/*/; do
+        [ -d "$dir" ] || continue
+        local mtime
+        mtime=$(get_dir_mtime "$dir")
+        backups_with_mtime+=("$mtime $dir")
+    done
+
+    printf '%s\n' "${backups_with_mtime[@]}" | \
+        sort -rn | \
+        while IFS=' ' read -r mtime backup_path; do
+            local backup
+            backup=$(basename "$backup_path")
             local metadata_file="${backup_path}/backup-metadata.json"
 
             echo "  Backup: $backup"
 
             if [ -f "$metadata_file" ]; then
-                local timestamp=$(jq -r '.timestamp' "$metadata_file" 2>/dev/null || echo "unknown")
-                local nginx_ver=$(jq -r '.nginx_version' "$metadata_file" 2>/dev/null || echo "unknown")
-                local target=$(jq -r '.target_site' "$metadata_file" 2>/dev/null || echo "unknown")
+                local timestamp
+                local nginx_ver
+                local target
+                timestamp=$(jq -r '.timestamp' "$metadata_file" 2>/dev/null || echo "unknown")
+                nginx_ver=$(jq -r '.nginx_version' "$metadata_file" 2>/dev/null || echo "unknown")
+                target=$(jq -r '.target_site' "$metadata_file" 2>/dev/null || echo "unknown")
 
                 echo "    Time: $timestamp"
                 echo "    Nginx: $nginx_ver"
@@ -392,7 +440,8 @@ list_backups() {
             fi
 
             # Show size
-            local size=$(du -sh "$backup_path" 2>/dev/null | cut -f1)
+            local size
+            size=$(du -sh "$backup_path" 2>/dev/null | cut -f1)
             echo "    Size: $size"
 
             echo ""
