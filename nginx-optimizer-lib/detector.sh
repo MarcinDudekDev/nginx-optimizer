@@ -30,6 +30,11 @@ DETECTED_INSTANCES=()
 NGINX_COMPILED_CONFIG=""
 NGINX_CONFIG_CACHED=false
 
+# Analysis results cache
+ANALYSIS_CACHE_DIR="${DATA_DIR:-$HOME/.nginx-optimizer}/cache"
+ANALYSIS_CACHE_FILE=""
+CACHED_CONFIG_HASH=""
+
 # Global to store last detected source file for directives
 LAST_DIRECTIVE_SOURCE=""
 
@@ -55,6 +60,111 @@ validate_site_name() {
         return 1
     fi
     return 0
+}
+
+################################################################################
+# Analysis Cache Functions
+################################################################################
+
+# Get hash of current nginx config (for cache validation)
+get_config_hash() {
+    local config_output
+    if [ -n "$NGINX_COMPILED_CONFIG" ]; then
+        config_output="$NGINX_COMPILED_CONFIG"
+    elif docker ps --format "{{.Names}}" 2>/dev/null | grep -q "wp-test-proxy"; then
+        config_output=$(docker exec wp-test-proxy nginx -T 2>/dev/null)
+    elif command -v nginx &>/dev/null; then
+        config_output=$(nginx -T 2>/dev/null)
+    else
+        echo ""
+        return 1
+    fi
+    # Use md5 (macOS) or md5sum (Linux)
+    if command -v md5 &>/dev/null; then
+        printf '%s' "$config_output" | md5 | cut -d' ' -f1
+    else
+        printf '%s' "$config_output" | md5sum | cut -d' ' -f1
+    fi
+}
+
+# Initialize cache directory
+init_analysis_cache() {
+    mkdir -p "$ANALYSIS_CACHE_DIR" 2>/dev/null || true
+    ANALYSIS_CACHE_FILE="${ANALYSIS_CACHE_DIR}/analysis.cache"
+}
+
+# Save analysis state to cache (called after analysis completes)
+save_analysis_cache() {
+    local hash="$1"
+    [ -z "$hash" ] && return 1
+    init_analysis_cache
+    {
+        echo "HASH:$hash"
+        echo "TIME:$(date +%s)"
+        echo "SITES:$TOTAL_SITES_ANALYZED"
+        echo "---MISSING---"
+        printf '%s' "$MISSING_FEATURES"
+    } > "$ANALYSIS_CACHE_FILE"
+}
+
+# Load cached analysis if hash matches
+# Args: $1 = current config hash
+# Returns: 0 if cache hit (restores state, shows recommendations), 1 if miss
+load_analysis_cache() {
+    local current_hash="$1"
+    init_analysis_cache
+
+    [ ! -f "$ANALYSIS_CACHE_FILE" ] && return 1
+
+    local cached_hash cached_time cached_sites
+    cached_hash=$(grep "^HASH:" "$ANALYSIS_CACHE_FILE" | cut -d: -f2)
+    cached_time=$(grep "^TIME:" "$ANALYSIS_CACHE_FILE" | cut -d: -f2)
+    cached_sites=$(grep "^SITES:" "$ANALYSIS_CACHE_FILE" | cut -d: -f2)
+
+    # Check hash match
+    if [ "$cached_hash" != "$current_hash" ]; then
+        return 1
+    fi
+
+    # Calculate age
+    local now age_seconds age_display
+    now=$(date +%s)
+    age_seconds=$((now - cached_time))
+
+    if [ "$age_seconds" -lt 60 ]; then
+        age_display="${age_seconds}s ago"
+    elif [ "$age_seconds" -lt 3600 ]; then
+        age_display="$((age_seconds / 60))m ago"
+    elif [ "$age_seconds" -lt 86400 ]; then
+        age_display="$((age_seconds / 3600))h ago"
+    else
+        age_display="$((age_seconds / 86400))d ago"
+    fi
+
+    # Restore state
+    MISSING_FEATURES=$(sed -n '/^---MISSING---$/,$ p' "$ANALYSIS_CACHE_FILE" | tail -n +2)
+    TOTAL_SITES_ANALYZED="$cached_sites"
+
+    # Output cache indicator
+    echo ""
+    echo -e "${CYAN}[CACHED]${NC} Config unchanged (${age_display}, hash: ${current_hash:0:8}...)"
+    echo -e "${CYAN}[CACHED]${NC} Run with --no-cache to force fresh analysis"
+    echo ""
+    echo "═══════════════════════════════════════════════════════════"
+    echo "Summary: $TOTAL_SITES_ANALYZED sites (cached)"
+    echo "═══════════════════════════════════════════════════════════"
+
+    # Show recommendations from cached state
+    show_recommendations
+
+    return 0
+}
+
+# Clear analysis cache
+clear_analysis_cache() {
+    init_analysis_cache
+    rm -f "$ANALYSIS_CACHE_FILE"
+    log_info "Analysis cache cleared"
 }
 
 ################################################################################
@@ -1601,6 +1711,17 @@ analyze_wp_test_site() {
 analyze_optimizations() {
     local target_site="$1"
 
+    # Check analysis cache (unless --no-cache or targeting specific site)
+    if [ "${NO_CACHE:-false}" != "true" ] && [ -z "$target_site" ]; then
+        local config_hash
+        config_hash=$(get_config_hash)
+        if [ -n "$config_hash" ] && load_analysis_cache "$config_hash"; then
+            return 0
+        fi
+        # Store hash for saving cache later
+        CACHED_CONFIG_HASH="$config_hash"
+    fi
+
     # If target_site specified, only analyze that site using per-site view
     if [ -n "$target_site" ]; then
         # Initialize parser for Docker config if needed
@@ -1708,6 +1829,11 @@ analyze_optimizations() {
     echo -e "  ${GREEN}✓${NC} = Enabled"
     echo -e "  ${YELLOW}✗${NC} = Missing (can be optimized)"
     echo "═══════════════════════════════════════════════════════════"
+
+    # Save to cache for instant subsequent runs
+    if [ -n "$CACHED_CONFIG_HASH" ]; then
+        save_analysis_cache "$CACHED_CONFIG_HASH"
+    fi
 
     # Show recommendations and optionally apply
     show_recommendations

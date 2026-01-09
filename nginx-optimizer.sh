@@ -46,6 +46,7 @@ FORCE=false
 QUIET=false
 JSON_OUTPUT=false
 SHOW_VERSION=false
+NO_CACHE=false
 SPECIFIC_FEATURE=""
 EXCLUDE_FEATURE=""
 # shellcheck disable=SC2034  # Used by sourced library files (backup.sh)
@@ -674,6 +675,10 @@ parse_arguments() {
             --json)
                 JSON_OUTPUT=true
                 QUIET=true  # JSON mode implies quiet
+                shift
+                ;;
+            --no-cache)
+                NO_CACHE=true
                 shift
                 ;;
             --feature)
