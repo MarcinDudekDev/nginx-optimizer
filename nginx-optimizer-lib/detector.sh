@@ -2090,28 +2090,37 @@ show_recommendations() {
 
         # Ask to apply for real
         echo ""
-        read -r -p "Apply these changes for real? [y/N]: " confirm
-        if [[ "$confirm" =~ ^[Yy]$ ]]; then
-            echo ""
-            if [ -n "$cmd_feature" ]; then
-                ./nginx-optimizer.sh optimize --feature "$cmd_feature" --force 2>&1 || true
-            else
-                ./nginx-optimizer.sh optimize --force 2>&1 || true
-            fi
+        read -r -p "Apply these changes for real? [y/N/q]: " confirm
+        case "$confirm" in
+            q|Q|quit|exit)
+                echo "Exiting interactive mode."
+                return 0
+                ;;
+            y|Y)
+                echo ""
+                if [ -n "$cmd_feature" ]; then
+                    ./nginx-optimizer.sh optimize --feature "$cmd_feature" --force 2>&1 || true
+                else
+                    ./nginx-optimizer.sh optimize --force 2>&1 || true
+                fi
 
-            # Re-analyze after applying
-            echo ""
-            log_info "Re-analyzing to update status..."
-            FEATURE_CACHE_BUILT=false
-            NO_CACHE=true
-            MISSING_FEATURES=""
-            reset_recommendations
-            analyze_optimizations ""
-        fi
+                # Re-analyze after applying
+                echo ""
+                log_info "Re-analyzing to update status..."
+                FEATURE_CACHE_BUILT=false
+                NO_CACHE=true
+                MISSING_FEATURES=""
+                reset_recommendations
+                analyze_optimizations ""
 
-        echo ""
-        echo "Press Enter to continue..."
-        read -r
+                echo ""
+                echo "Press Enter to continue..."
+                read -r
+                ;;
+            *)
+                # N or empty - just go back to menu
+                ;;
+        esac
     done
 }
 
