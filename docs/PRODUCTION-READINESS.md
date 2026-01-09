@@ -523,15 +523,13 @@ After Path B: v1.0.0 (production ready)
 - [ ] Add automatic rollback if nginx fails to start (partial - needs enhancement)
 - [ ] Add --check mode (validate without changing) (deferred)
 
-### Next Priority - Phase 4: Documentation & Distribution
-```
-1. [ ] CONTRIBUTING.md with development guidelines
-2. [ ] Man page (nginx-optimizer.1)
-3. [ ] One-liner install script (curl | bash style)
-4. [ ] Homebrew formula
-5. [ ] Issue templates (.github/ISSUE_TEMPLATE/)
-6. [ ] PR template (.github/PULL_REQUEST_TEMPLATE.md)
-```
+### Completed - Phase 4 (2025-01-09)
+- [x] CONTRIBUTING.md with development guidelines
+- [x] One-liner install script (curl | bash style)
+- [x] Issue templates (.github/ISSUE_TEMPLATE/)
+- [x] PR template (.github/PULL_REQUEST_TEMPLATE.md)
+- [ ] Man page (nginx-optimizer.1) - deferred to Phase 5
+- [ ] Homebrew formula - deferred to Phase 5
 
 ### Future - Phase 5: Advanced Features
 ```
