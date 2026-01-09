@@ -43,6 +43,8 @@ DRY_RUN=false
 # shellcheck disable=SC2034  # Used by sourced library files (compiler.sh, optimizer.sh)
 FORCE=false
 QUIET=false
+JSON_OUTPUT=false
+SHOW_VERSION=false
 SPECIFIC_FEATURE=""
 EXCLUDE_FEATURE=""
 # shellcheck disable=SC2034  # Used by sourced library files (backup.sh)
@@ -124,6 +126,16 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $*" | tee -a "${LOG_FILE}"
 }
 
+# JSON output helper - requires jq
+json_output() {
+    local data="$1"
+    if command -v jq &>/dev/null; then
+        echo "$data" | jq .
+    else
+        echo "$data"
+    fi
+}
+
 ################################################################################
 # Initialization
 ################################################################################
@@ -194,12 +206,14 @@ COMMANDS:
     honeypot <site>             Deploy honeypot tarpit for site (traps bots)
     honeypot-logs [hours]       Analyze honeypot logs (default: 24h)
     honeypot-export             Export attacker IPs for blocklists
+    update                      Self-update from git repository
     help                        Show this help message
 
 OPTIONS:
     --dry-run                   Show what would be done without applying
     --force                     Skip confirmations
     -q, --quiet                 Suppress informational output (for scripting)
+    --json                      Output JSON (for status, list commands)
     --feature <name>            Apply specific feature only
     --exclude <name>            Exclude specific feature
     --backup-dir <path>         Custom backup directory
@@ -255,6 +269,9 @@ EXAMPLES:
     # Export attacker IPs for blocklist
     nginx-optimizer honeypot-export
 
+    # Update nginx-optimizer to latest version
+    nginx-optimizer update
+
 ENVIRONMENT:
     Supports system nginx, Docker containers, and wp-test environments
     Backups stored in: ${BACKUP_DIR}
@@ -265,7 +282,11 @@ EOF
 }
 
 show_version() {
-    echo "nginx-optimizer version ${VERSION}"
+    if [ "$JSON_OUTPUT" = true ]; then
+        json_output "{\"version\": \"${VERSION}\"}"
+    else
+        echo "nginx-optimizer version ${VERSION}"
+    fi
 }
 
 ################################################################################
@@ -273,6 +294,11 @@ show_version() {
 ################################################################################
 
 cmd_analyze() {
+    if [ "$JSON_OUTPUT" = true ]; then
+        json_output "{\"command\": \"analyze\", \"version\": \"${VERSION}\", \"target\": \"${TARGET_SITE:-all}\", \"status\": \"placeholder\", \"message\": \"Full JSON output requires detector library refactoring\"}"
+        return 0
+    fi
+
     log_info "Analyzing nginx configurations..."
 
     if [ -n "$TARGET_SITE" ]; then
@@ -361,6 +387,23 @@ cmd_test() {
 }
 
 cmd_status() {
+    if [ "$JSON_OUTPUT" = true ]; then
+        # Minimal JSON output for status
+        local json_result
+        json_result=$(cat <<EOF
+{
+  "command": "status",
+  "version": "${VERSION}",
+  "target": "${TARGET_SITE:-all}",
+  "status": "ok",
+  "message": "Use non-JSON mode for detailed optimization analysis"
+}
+EOF
+)
+        json_output "$json_result"
+        return 0
+    fi
+
     log_info "Checking optimization status..."
 
     if type -t show_status &>/dev/null; then
@@ -372,6 +415,24 @@ cmd_status() {
 }
 
 cmd_list() {
+    if [ "$JSON_OUTPUT" = true ]; then
+        # Run detection but capture output
+        log_info "Detecting nginx installations..." >> "$LOG_FILE"
+        # Minimal JSON - actual detection would need refactoring
+        local json_result
+        json_result=$(cat <<EOF
+{
+  "command": "list",
+  "version": "${VERSION}",
+  "status": "ok",
+  "message": "JSON list output not fully implemented. Use non-JSON mode."
+}
+EOF
+)
+        json_output "$json_result"
+        return 0
+    fi
+
     log_info "Detecting nginx installations..."
 
     if type -t list_nginx_instances &>/dev/null; then
@@ -476,6 +537,76 @@ cmd_honeypot_fail2ban() {
     fi
 }
 
+cmd_update() {
+    log_info "Checking for updates..."
+
+    # Check if we're in a git repository
+    if [ ! -d "${SCRIPT_DIR}/.git" ]; then
+        log_error "Not a git installation. Update manually or reinstall."
+        log_info "Install with: curl -fsSL https://raw.githubusercontent.com/MarcinDudekDev/nginx-optimizer/main/install.sh | bash"
+        exit 1
+    fi
+
+    cd "$SCRIPT_DIR"
+
+    # Check for local modifications
+    if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+        log_warn "Local modifications detected:"
+        git status --short
+        echo ""
+        if [ "$FORCE" = false ]; then
+            read -rp "Continue anyway? Changes will be stashed. [y/N] " confirm
+            if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+                log_info "Update cancelled."
+                exit 0
+            fi
+            git stash
+            log_info "Local changes stashed. Restore with: git stash pop"
+        else
+            git stash
+        fi
+    fi
+
+    # Fetch and show what's new
+    local current_version
+    current_version=$(git rev-parse --short HEAD)
+
+    git fetch origin main --quiet
+
+    local new_commits
+    new_commits=$(git log HEAD..origin/main --oneline 2>/dev/null)
+
+    if [ -z "$new_commits" ]; then
+        log_success "Already up to date (${current_version})"
+        exit 0
+    fi
+
+    echo ""
+    log_info "Changes available:"
+    echo "$new_commits" | head -10
+    local commit_count
+    commit_count=$(echo "$new_commits" | wc -l | tr -d ' ')
+    if [ "$commit_count" -gt 10 ]; then
+        echo "  ... and $((commit_count - 10)) more commits"
+    fi
+    echo ""
+
+    # Pull updates
+    if git pull origin main --quiet; then
+        local new_version
+        new_version=$(git rev-parse --short HEAD)
+        log_success "Updated: ${current_version} -> ${new_version}"
+
+        # Show if version number changed
+        local script_version
+        script_version=$(grep '^VERSION=' "$SCRIPT_DIR/nginx-optimizer.sh" | cut -d'"' -f2)
+        log_info "nginx-optimizer version: ${script_version}"
+    else
+        log_error "Update failed. Check network connection and try again."
+        exit 1
+    fi
+}
+
 ################################################################################
 # Interactive Wizard
 ################################################################################
@@ -522,7 +653,7 @@ parse_arguments() {
 
     while [ $# -gt 0 ]; do
         case "$1" in
-            analyze|optimize|compile|rollback|test|status|list|benchmark|help|honeypot|honeypot-logs|honeypot-export|honeypot-fail2ban)
+            analyze|optimize|compile|rollback|test|status|list|benchmark|help|update|honeypot|honeypot-logs|honeypot-export|honeypot-fail2ban)
                 COMMAND="$1"
                 shift
                 ;;
@@ -537,6 +668,11 @@ parse_arguments() {
                 ;;
             -q|--quiet)
                 QUIET=true
+                shift
+                ;;
+            --json)
+                JSON_OUTPUT=true
+                QUIET=true  # JSON mode implies quiet
                 shift
                 ;;
             --feature)
@@ -565,8 +701,8 @@ parse_arguments() {
                 shift 2
                 ;;
             -v|--version)
-                show_version
-                exit 0
+                SHOW_VERSION=true
+                shift
                 ;;
             -h|--help)
                 show_help
@@ -584,6 +720,12 @@ parse_arguments() {
                 ;;
         esac
     done
+
+    # Handle --version after all flags parsed (so --json works with it)
+    if [ "$SHOW_VERSION" = true ]; then
+        show_version
+        exit 0
+    fi
 
     if [ -z "$COMMAND" ]; then
         show_wizard
@@ -655,6 +797,9 @@ main() {
             ;;
         honeypot-fail2ban)
             cmd_honeypot_fail2ban
+            ;;
+        update)
+            cmd_update
             ;;
         help)
             show_help

@@ -1,0 +1,200 @@
+.TH NGINX-OPTIMIZER 1 "January 2025" "nginx-optimizer 0.9.0-beta" "User Commands"
+.SH NAME
+nginx-optimizer \- Comprehensive NGINX optimization tool for WordPress
+.SH SYNOPSIS
+.B nginx-optimizer
+[\fICOMMAND\fR]
+[\fIOPTIONS\fR]
+[\fISITE\fR]
+.SH DESCRIPTION
+.B nginx-optimizer
+is a comprehensive tool for analyzing, optimizing, and managing NGINX configurations, with a focus on WordPress deployments. It supports HTTP/3, FastCGI caching, Redis, Brotli compression, security headers, and anti-bot honeypots. The tool handles system nginx, Docker containers, and wp-test environments.
+.PP
+All operations create automatic backups and can be previewed with \fB--dry-run\fR before applying changes. Configuration validation and testing are performed before reloading nginx.
+.SH COMMANDS
+.TP
+.B analyze \fR[\fISITE\fR]
+Analyze nginx configuration and show missing optimizations. If a site is specified, only that site is analyzed; otherwise all detected nginx instances are analyzed.
+.TP
+.B optimize \fR[\fISITE\fR]
+Apply optimizations to the specified site or all sites. Creates automatic backup before making changes. Use with \fB--feature\fR or \fB--exclude\fR to control which optimizations are applied.
+.TP
+.B compile
+Compile nginx from source with Brotli support and HTTP/3 (QUIC) modules. Useful when package managers don't provide required modules.
+.TP
+.B rollback \fR[\fITIMESTAMP\fR]
+Rollback to a previous configuration. If no timestamp is provided, displays available backups and prompts for selection. Timestamps are in YYYYMMDD-HHMMSS format.
+.TP
+.B test \fR[\fISITE\fR]
+Test nginx configuration syntax without applying changes. Validates configuration files for errors.
+.TP
+.B status \fR[\fISITE\fR]
+Show current optimization status for the specified site or all sites. Displays which features are enabled and which are missing.
+.TP
+.B list
+List all detected nginx installations including system nginx, Docker containers, and wp-test instances.
+.TP
+.B benchmark \fR[\fISITE\fR]
+Run performance benchmarks on the specified site. Requires a site parameter. Tests response times, throughput, and compression effectiveness.
+.TP
+.B honeypot \fI<SITE>\fR
+Deploy honeypot tarpit for the specified site. Creates canary tokens and tarpit endpoints to trap bots and automated attackers. Requires site domain as parameter.
+.TP
+.B honeypot-logs \fR[\fIHOURS\fR]
+Analyze honeypot logs for the specified time period. Default is 24 hours. Shows attacker IPs, user agents, and attack patterns.
+.TP
+.B honeypot-export
+Export attacker IPs from honeypot logs for use in blocklists or firewall rules.
+.TP
+.B help
+Display help message with usage information and examples.
+.SH OPTIONS
+.TP
+.B --dry-run
+Show what would be done without actually applying changes. Useful for previewing optimizations before committing to them.
+.TP
+.B --force
+Skip confirmation prompts. Use with caution in production environments.
+.TP
+.BR -q ", " --quiet
+Suppress informational output. Only errors and warnings are displayed. Useful for scripting and automation.
+.TP
+.B --feature \fINAME\fR
+Apply only the specified feature. Can be used to enable a single optimization without affecting others. See \fBFEATURES\fR section for available feature names.
+.TP
+.B --exclude \fINAME\fR
+Exclude the specified feature from optimization. All other features are applied normally. See \fBFEATURES\fR section for available feature names.
+.TP
+.B --backup-dir \fIPATH\fR
+Use a custom directory for storing backups instead of the default ~/.nginx-optimizer/backups/.
+.TP
+.BR -v ", " --version
+Display version information and exit.
+.SH FEATURES
+The following features can be enabled or excluded using \fB--feature\fR or \fB--exclude\fR:
+.TP
+.B http3
+HTTP/3 (QUIC) protocol support for improved performance and reduced latency.
+.TP
+.B fastcgi-cache
+Full-page FastCGI caching with WordPress-aware cache exclusions for dynamic content.
+.TP
+.B redis
+Redis object caching integration for improved database query performance.
+.TP
+.B brotli
+Brotli and Zopfli compression for reduced bandwidth usage and faster page loads.
+.TP
+.B security
+Security headers (CSP, HSTS, X-Frame-Options) and rate limiting to protect against attacks.
+.TP
+.B wordpress
+WordPress-specific exclusions for admin areas, login pages, and dynamic endpoints.
+.TP
+.B opcache
+PHP OpCache optimization for improved PHP performance with 8.2/8.3 support.
+.TP
+.B honeypot
+Bot tarpit with canary tokens to trap and identify automated attackers.
+.SH FILES
+.TP
+.I ~/.nginx-optimizer/
+Main data directory for nginx-optimizer. Contains all configuration, backups, and logs.
+.TP
+.I ~/.nginx-optimizer/backups/
+Backup storage directory. Each backup is timestamped in YYYYMMDD-HHMMSS format.
+.TP
+.I ~/.nginx-optimizer/logs/
+Log file directory. Each optimization run creates a timestamped log file.
+.TP
+.I ~/.nginx-optimizer/config.json
+Configuration file for nginx-optimizer settings (reserved for future use).
+.SH EXIT STATUS
+.TP
+.B 0
+Success. Operation completed without errors.
+.TP
+.B 1
+Error. Operation failed or invalid arguments provided. Check log files for details.
+.SH EXAMPLES
+.TP
+Analyze all nginx instances:
+.B nginx-optimizer analyze
+.TP
+Analyze specific site:
+.B nginx-optimizer analyze quiz-test.local
+.TP
+Preview optimizations without applying:
+.B nginx-optimizer optimize --dry-run
+.TP
+Optimize specific site:
+.B nginx-optimizer optimize quiz-test.local
+.TP
+Apply only HTTP/3 feature:
+.B nginx-optimizer optimize --feature http3
+.TP
+Optimize all sites except Brotli:
+.B nginx-optimizer optimize --exclude brotli
+.TP
+Run performance benchmark:
+.B nginx-optimizer benchmark quiz-test.local
+.TP
+Restore previous backup:
+.B nginx-optimizer rollback 20250124-143022
+.TP
+Check optimization status:
+.B nginx-optimizer status
+.TP
+Deploy honeypot for site:
+.B nginx-optimizer honeypot mysite.com
+.TP
+Analyze honeypot activity (last 24 hours):
+.B nginx-optimizer honeypot-logs
+.TP
+Export attacker IPs for blocklist:
+.B nginx-optimizer honeypot-export
+.TP
+Silent mode for scripting:
+.B nginx-optimizer optimize --quiet --force
+.SH ENVIRONMENT
+.B nginx-optimizer
+supports multiple nginx deployment types:
+.TP
+\(bu System nginx (installed via package manager)
+.TP
+\(bu Docker containers (auto-detected)
+.TP
+\(bu wp-test environments (WordPress testing tool)
+.PP
+The tool requires the following commands to be available:
+.BR rsync ", " curl ", " jq ", and " bash " >= 3.2"
+.PP
+Optional but recommended:
+.BR nginx ", " docker ", " redis-cli
+.SH SEE ALSO
+.BR nginx (8),
+.BR nginx.conf (5),
+.BR docker (1),
+.BR redis-cli (1)
+.PP
+Online documentation:
+.UR https://github.com/MarcinDudekDev/nginx-optimizer
+.UE
+.SH BUGS
+Report bugs to:
+.UR https://github.com/MarcinDudekDev/nginx-optimizer/issues
+.UE
+.PP
+Include the following in bug reports:
+.TP
+\(bu nginx-optimizer version (\fBnginx-optimizer --version\fR)
+.TP
+\(bu Operating system and version
+.TP
+\(bu nginx version (\fBnginx -v\fR)
+.TP
+\(bu Relevant log files from ~/.nginx-optimizer/logs/
+.SH AUTHORS
+Written by Marcin Dudek.
+.PP
+Maintained by the nginx-optimizer project contributors.
