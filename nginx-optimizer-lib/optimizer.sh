@@ -467,7 +467,10 @@ apply_optimizations() {
     done
 
     echo ""
-    local applied_count=${#APPLIED_OPTIMIZATIONS[@]:-0}
+    local applied_count=0
+    if [ ${#APPLIED_OPTIMIZATIONS[@]} -gt 0 ] 2>/dev/null; then
+        applied_count=${#APPLIED_OPTIMIZATIONS[@]}
+    fi
     log_info "Applied ${applied_count} optimization(s)"
 
     # Show what was applied

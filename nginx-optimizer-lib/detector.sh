@@ -1875,16 +1875,14 @@ reset_recommendations() {
 }
 
 # Generate and display recommendations
-show_recommendations() {
-    [ -z "$MISSING_FEATURES" ] && return 0
+# Display recommendations menu (non-interactive version)
+display_recommendations_menu() {
+    local rec_count=0
 
     echo ""
     echo "═══════════════════════════════════════════════════════════"
     echo "Recommended Actions"
     echo "═══════════════════════════════════════════════════════════"
-
-    local recommendations=""
-    local rec_count=0
 
     # Process each feature type
     while IFS='|' read -r feat_name display_name is_global cli_feature; do
@@ -1903,22 +1901,18 @@ show_recommendations() {
         rec_count=$((rec_count + 1))
 
         if [ "$missing_count" -eq "$TOTAL_SITES_ANALYZED" ] && [ "$is_global" = "1" ]; then
-            # All sites missing a global feature - suggest global enable
             echo ""
             echo -e "  ${YELLOW}${rec_count}.${NC} Enable ${display_name} globally (affects all $missing_count sites)"
             echo -e "     ${CYAN}./nginx-optimizer.sh optimize --feature ${cli_feature}${NC}"
         elif [ "$missing_count" -eq "$TOTAL_SITES_ANALYZED" ]; then
-            # All sites missing a per-site feature
             echo ""
             echo -e "  ${YELLOW}${rec_count}.${NC} Enable ${display_name} for all $missing_count sites"
             echo -e "     ${CYAN}./nginx-optimizer.sh optimize --feature ${cli_feature}${NC}"
         elif [ "$missing_count" -gt 3 ]; then
-            # Many sites missing - show count
             echo ""
             echo -e "  ${YELLOW}${rec_count}.${NC} Enable ${display_name} ($missing_count sites missing)"
             echo -e "     ${CYAN}./nginx-optimizer.sh optimize --feature ${cli_feature}${NC}"
         else
-            # Few sites missing - list them
             local site_list
             site_list=$(printf '%s' "$missing_sites" | tr '\n' ', ' | sed 's/,$//')
             echo ""
@@ -1927,69 +1921,146 @@ show_recommendations() {
         fi
     done <<< "$FEATURE_META"
 
-    if [ "$rec_count" -eq 0 ]; then
+    echo "$rec_count"  # Return count via stdout capture
+}
+
+# Get feature by selection number
+get_feature_by_number() {
+    local target_num="$1"
+    local current=0
+
+    while IFS='|' read -r feat_name display_name is_global cli_feature; do
+        [ -z "$feat_name" ] && continue
+        local missing_sites
+        missing_sites=$(printf '%s' "$MISSING_FEATURES" | grep "^${feat_name}:" | cut -d: -f2 | sort -u || true)
+        [ -z "$missing_sites" ] && continue
+        current=$((current + 1))
+        if [ "$current" -eq "$target_num" ]; then
+            echo "$cli_feature"
+            return 0
+        fi
+    done <<< "$FEATURE_META"
+}
+
+show_recommendations() {
+    [ -z "$MISSING_FEATURES" ] && return 0
+
+    # Non-interactive mode - display menu but don't prompt
+    if [ "${QUIET:-}" = "true" ] || [ ! -t 1 ]; then
+        local menu_output
+        menu_output=$(display_recommendations_menu)
+        # Print menu without the count line (last line is rec_count)
+        echo "$menu_output" | head -n -1
         echo ""
-        echo -e "  ${GREEN}All optimizations already applied!${NC}"
+        echo -e "  ${CYAN}0.${NC} Apply ALL recommendations"
+        echo "═══════════════════════════════════════════════════════════"
         return 0
     fi
 
-    echo ""
-    echo -e "  ${CYAN}0.${NC} Apply ALL recommendations"
-    echo "═══════════════════════════════════════════════════════════"
+    # Interactive loop
+    while true; do
+        # Display menu and capture rec_count (last line of output)
+        local menu_output
+        menu_output=$(display_recommendations_menu)
+        local rec_count
+        rec_count=$(echo "$menu_output" | tail -1)
+        echo "$menu_output" | head -n -1  # Print menu without the count line
 
-    # Interactive prompt (only if not in quiet mode and stdout is terminal)
-    if [ "${QUIET:-}" != "true" ] && [ -t 1 ]; then
-        echo ""
-        read -r -p "Select [1-${rec_count}, 0=all, Enter=skip]: " selection
-
-        # Skip if empty
-        [ -z "$selection" ] && return 0
-
-        # Validate selection
-        if ! [[ "$selection" =~ ^[0-9]+$ ]] || [ "$selection" -gt "$rec_count" ]; then
-            echo "Invalid selection. Skipped."
+        if [ "$rec_count" -eq 0 ] 2>/dev/null; then
+            echo ""
+            echo -e "  ${GREEN}All optimizations already applied!${NC}"
+            echo ""
             return 0
         fi
 
-        # Release our lock before spawning optimize (it will acquire its own)
-        local lock_dir="${DATA_DIR:-$HOME/.nginx-optimizer}/nginx-optimizer.lock"
-        if [ -d "$lock_dir" ]; then
-            rm -rf "$lock_dir" 2>/dev/null || true
-        fi
-
-        # Build command based on selection
-        local cmd_feature=""
-        if [ "$selection" -eq 0 ]; then
-            echo ""
-            echo "Running: ./nginx-optimizer.sh optimize --dry-run"
-        else
-            # Get the feature for this selection number
-            local current=0
-            while IFS='|' read -r feat_name display_name is_global cli_feature; do
-                [ -z "$feat_name" ] && continue
-                local missing_sites
-                missing_sites=$(printf '%s' "$MISSING_FEATURES" | grep "^${feat_name}:" | cut -d: -f2 | sort -u || true)
-                [ -z "$missing_sites" ] && continue
-                current=$((current + 1))
-                if [ "$current" -eq "$selection" ]; then
-                    cmd_feature="$cli_feature"
-                    break
-                fi
-            done <<< "$FEATURE_META"
-            echo ""
-            echo "Running: ./nginx-optimizer.sh optimize --feature $cmd_feature --dry-run"
-        fi
-
-        echo "(Use --force to apply without dry-run)"
         echo ""
+        echo -e "  ${CYAN}0.${NC} Apply ALL recommendations"
+        echo "═══════════════════════════════════════════════════════════"
+        echo ""
+        echo -e "  ${YELLOW}q${NC} = quit   ${YELLOW}r${NC} = re-analyze   ${YELLOW}Enter${NC} = refresh menu"
+        echo ""
+        read -r -p "Select [1-${rec_count}, 0=all, q=quit]: " selection
 
-        # Execute
-        if [ -n "$cmd_feature" ]; then
-            ./nginx-optimizer.sh optimize --feature "$cmd_feature" --dry-run
-        else
-            ./nginx-optimizer.sh optimize --dry-run
+        # Handle special inputs
+        case "$selection" in
+            q|Q|quit|exit)
+                echo "Exiting interactive mode."
+                return 0
+                ;;
+            r|R|refresh|reanalyze)
+                echo ""
+                log_info "Re-analyzing configurations..."
+                # Clear cache and re-run analysis
+                FEATURE_CACHE_BUILT=false
+                NO_CACHE=true
+                MISSING_FEATURES=""
+                # Re-detect and analyze
+                detect_nginx_installations
+                for instance in "${DETECTED_INSTANCES[@]}"; do
+                    analyze_single_instance "$instance"
+                done
+                continue
+                ;;
+            "")
+                # Empty = just refresh menu
+                continue
+                ;;
+        esac
+
+        # Validate numeric selection
+        if ! [[ "$selection" =~ ^[0-9]+$ ]] || [ "$selection" -gt "$rec_count" ]; then
+            echo -e "${RED}Invalid selection.${NC} Enter 1-${rec_count}, 0 for all, or q to quit."
+            sleep 1
+            continue
         fi
-    fi
+
+        # Release our lock before spawning optimize
+        local lock_dir="${DATA_DIR:-$HOME/.nginx-optimizer}/nginx-optimizer.lock"
+        [ -d "$lock_dir" ] && rm -rf "$lock_dir" 2>/dev/null || true
+
+        # Build and execute command
+        local cmd_feature=""
+        if [ "$selection" -ne 0 ]; then
+            cmd_feature=$(get_feature_by_number "$selection")
+        fi
+
+        # First show dry-run preview
+        echo ""
+        if [ -n "$cmd_feature" ]; then
+            echo -e "${CYAN}Preview (dry-run):${NC}"
+            ./nginx-optimizer.sh optimize --feature "$cmd_feature" --dry-run 2>&1 || true
+        else
+            echo -e "${CYAN}Preview (dry-run):${NC}"
+            ./nginx-optimizer.sh optimize --dry-run 2>&1 || true
+        fi
+
+        # Ask to apply for real
+        echo ""
+        read -r -p "Apply these changes for real? [y/N]: " confirm
+        if [[ "$confirm" =~ ^[Yy]$ ]]; then
+            echo ""
+            if [ -n "$cmd_feature" ]; then
+                ./nginx-optimizer.sh optimize --feature "$cmd_feature" --force 2>&1 || true
+            else
+                ./nginx-optimizer.sh optimize --force 2>&1 || true
+            fi
+
+            # Re-analyze after applying
+            echo ""
+            log_info "Re-analyzing to update status..."
+            FEATURE_CACHE_BUILT=false
+            NO_CACHE=true
+            MISSING_FEATURES=""
+            detect_nginx_installations
+            for instance in "${DETECTED_INSTANCES[@]}"; do
+                analyze_single_instance "$instance"
+            done
+        fi
+
+        echo ""
+        echo "Press Enter to continue..."
+        read -r
+    done
 }
 
 reset_score() {
