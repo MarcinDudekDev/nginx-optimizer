@@ -618,6 +618,13 @@ apply_http3_system() {
     if [ -d "/etc/nginx/sites-enabled" ]; then
         log_info "Auto-injecting HTTP/3 into server blocks..."
 
+        # Check if ANY config already has reuseport on quic (can only be set once globally)
+        local reuseport_exists=false
+        if grep -r "quic.*reuseport\|reuseport.*quic" /etc/nginx/sites-enabled/ 2>/dev/null | grep -qv '^\s*#'; then
+            reuseport_exists=true
+            log_info "reuseport already configured, new sites will use plain quic"
+        fi
+
         local first_site=true
         for site_conf in /etc/nginx/sites-enabled/*; do
             [ -f "$site_conf" ] || continue
@@ -635,9 +642,9 @@ apply_http3_system() {
                 continue
             fi
 
-            # Determine quic directive (reuseport only on first site)
+            # Determine quic directive (reuseport only if not already used anywhere)
             local quic_directive quic_directive_v6
-            if [ "$first_site" = true ]; then
+            if [ "$first_site" = true ] && [ "$reuseport_exists" = false ]; then
                 quic_directive="listen 443 quic reuseport;"
                 quic_directive_v6="listen [::]:443 quic reuseport;"
                 first_site=false

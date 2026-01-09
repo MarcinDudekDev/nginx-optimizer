@@ -1990,15 +1990,12 @@ show_recommendations() {
             r|R|refresh|reanalyze)
                 echo ""
                 log_info "Re-analyzing configurations..."
-                # Clear cache and re-run analysis
+                # Clear cache and re-run full analysis
                 FEATURE_CACHE_BUILT=false
                 NO_CACHE=true
                 MISSING_FEATURES=""
-                # Re-detect and analyze
-                detect_nginx_installations
-                for instance in "${DETECTED_INSTANCES[@]}"; do
-                    analyze_single_instance "$instance"
-                done
+                reset_recommendations
+                analyze_optimizations ""
                 continue
                 ;;
             "")
@@ -2051,10 +2048,8 @@ show_recommendations() {
             FEATURE_CACHE_BUILT=false
             NO_CACHE=true
             MISSING_FEATURES=""
-            detect_nginx_installations
-            for instance in "${DETECTED_INSTANCES[@]}"; do
-                analyze_single_instance "$instance"
-            done
+            reset_recommendations
+            analyze_optimizations ""
         fi
 
         echo ""
