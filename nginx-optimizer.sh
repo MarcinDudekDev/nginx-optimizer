@@ -172,7 +172,7 @@ check_prerequisites() {
 }
 
 source_libraries() {
-    for lib in detector backup optimizer validator compiler docker monitoring benchmark honeypot; do
+    for lib in parser detector backup optimizer validator compiler docker monitoring benchmark honeypot; do
         lib_file="${LIB_DIR}/${lib}.sh"
         if [ -f "$lib_file" ]; then
             # shellcheck source=/dev/null

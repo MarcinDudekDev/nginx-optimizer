@@ -30,6 +30,13 @@ DETECTED_INSTANCES=()
 NGINX_COMPILED_CONFIG=""
 NGINX_CONFIG_CACHED=false
 
+# Global to store last detected source file for directives
+LAST_DIRECTIVE_SOURCE=""
+
+# Site filtering cache
+SITE_RELEVANT_FILES=""
+SITE_FILTERING_ACTIVE=false
+
 ################################################################################
 # Input Validation Functions
 ################################################################################
@@ -77,6 +84,11 @@ detect_system_nginx() {
                 local version
                 version=$(nginx -v 2>&1 | sed -n 's/.*nginx\/\([0-9.]*\).*/\1/p')
                 log_info "  Version: $version"
+
+                # Parse full config with nginx -T for source tracking
+                if type -t parse_nginx_config &>/dev/null; then
+                    parse_nginx_config || log_warn "Could not parse nginx -T output"
+                fi
             fi
             return 0
         fi
@@ -138,7 +150,7 @@ detect_wp_test_sites() {
             domain=$(basename "$site_dir")
             log_success "Found wp-test site: $domain"
             add_instance "wp_test" "$domain" "$site_dir"
-            ((site_count++))
+            site_count=$((site_count + 1))
         fi
     done
 
@@ -165,6 +177,11 @@ detect_nginx_instances() {
 
     # Reset instances array
     DETECTED_INSTANCES=()
+
+    # Initialize parser if available
+    if type -t parser_init &>/dev/null; then
+        parser_init || log_warn "Parser initialization failed, using legacy detection"
+    fi
 
     if [ -n "$target_site" ]; then
         # Validate site name to prevent path traversal
@@ -219,8 +236,343 @@ list_nginx_instances() {
 }
 
 ################################################################################
+# Site Filtering Functions
+################################################################################
+
+# Cache for site filter lookups (site_name|files format per line)
+SITE_FILTER_CACHE=""
+SITE_FILTER_CACHE_BUILT=false
+
+# Build site filter cache for ALL sites at once (called once, used many times)
+# This is the key optimization - parse config once, lookup instantly per site
+build_site_filter_cache() {
+    if [ "$SITE_FILTER_CACHE_BUILT" = true ]; then
+        return 0
+    fi
+
+    local config
+    # Get nginx config (use parser cache if available)
+    if [ -n "$PARSED_CONFIG_CACHE" ] && [ -f "$PARSED_CONFIG_CACHE" ]; then
+        config=$(cat "$PARSED_CONFIG_CACHE")
+    elif docker ps --format "{{.Names}}" 2>/dev/null | grep -q "wp-test-proxy"; then
+        config=$(docker exec wp-test-proxy nginx -T 2>/dev/null)
+    else
+        config=$(get_nginx_compiled_config)
+    fi
+
+    if [ -z "$config" ]; then
+        return 1
+    fi
+
+    # Build cache: parse ALL server blocks, map each server_name to its files
+    local cache_entries=""
+    local current_file=""
+    local in_server_block=false
+    local server_names=""
+    local server_block_files=""
+    local main_nginx_conf=""
+    local brace_depth=0
+
+    while IFS= read -r line; do
+        # Track current config file
+        if [[ "$line" =~ ^#.*configuration\ file\ ([^:]+):$ ]] || [[ "$line" =~ ^###FILE:(.+)$ ]]; then
+            current_file="${BASH_REMATCH[1]}"
+            [[ "$current_file" =~ nginx\.conf$ ]] && [ -z "$main_nginx_conf" ] && main_nginx_conf="$current_file"
+        fi
+
+        # Track server blocks
+        if [[ "$line" =~ ^[[:space:]]*server[[:space:]]*\{ ]]; then
+            in_server_block=true
+            server_names=""
+            server_block_files="$current_file"
+            brace_depth=1
+        elif [ "$in_server_block" = true ]; then
+            # Count braces
+            local open_b=${line//[^\{]/}
+            local close_b=${line//[^\}]/}
+            brace_depth=$((brace_depth + ${#open_b} - ${#close_b}))
+
+            # Capture server_name values
+            if [[ "$line" =~ server_name[[:space:]]+([^;]+) ]]; then
+                local names="${BASH_REMATCH[1]}"
+                for name in $names; do
+                    [[ "$name" =~ ^(localhost|_|default_server)$ ]] && continue
+                    [ -n "$server_names" ] && server_names="$server_names "
+                    server_names="$server_names$name"
+                done
+            fi
+
+            # Track file
+            if [ -n "$current_file" ] && [[ ! "$server_block_files" =~ "$current_file" ]]; then
+                server_block_files="$server_block_files:$current_file"
+            fi
+
+            # End of server block - save to cache
+            if [ $brace_depth -eq 0 ]; then
+                in_server_block=false
+                for name in $server_names; do
+                    # Add main nginx.conf to each site's files
+                    local files_with_main="$server_block_files"
+                    [ -n "$main_nginx_conf" ] && files_with_main="$main_nginx_conf:$files_with_main"
+                    cache_entries="${cache_entries}${name}|${files_with_main}"$'\n'
+                done
+            fi
+        fi
+    done <<< "$config"
+
+    SITE_FILTER_CACHE="$cache_entries"
+    SITE_FILTER_CACHE_BUILT=true
+}
+
+# Get cached site files (instant lookup)
+# Args: $1 = site name
+# Returns: colon-separated list of config files
+get_cached_site_files() {
+    local site="$1"
+
+    # Build cache if needed
+    [ "$SITE_FILTER_CACHE_BUILT" != true ] && build_site_filter_cache
+
+    # Lookup from cache
+    echo "$SITE_FILTER_CACHE" | grep "^${site}|" | head -n1 | cut -d'|' -f2 | tr ':' '\n'
+}
+
+# Get list of config files relevant to a specific site
+# Args: $1 = site name/domain
+# Returns: newline-separated list of config file paths
+get_site_config_files() {
+    local site="$1"
+    local relevant_files=""
+    local config
+
+    # Use docker exec for wp-test sites
+    if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "wp-test-proxy"; then
+        config=$(docker exec wp-test-proxy nginx -T 2>/dev/null)
+    else
+        config=$(get_nginx_compiled_config)
+    fi
+
+    if [ -z "$config" ]; then
+        return 1
+    fi
+
+    local current_file=""
+    local in_server_block=false
+    local server_block_matches=false
+    local server_block_files=""
+    local main_nginx_conf=""
+    local brace_depth=0
+
+    # Parse nginx -T output
+    while IFS= read -r line; do
+        # Track current config file
+        if [[ "$line" =~ ^#.*configuration\ file\ ([^:]+):$ ]]; then
+            current_file="${BASH_REMATCH[1]}"
+
+            # Always include main nginx.conf (global http context)
+            if [[ "$current_file" =~ nginx\.conf$ ]] && [ -z "$main_nginx_conf" ]; then
+                main_nginx_conf="$current_file"
+            fi
+        fi
+
+        # Track server blocks and brace depth
+        if echo "$line" | grep -q "^[[:space:]]*server[[:space:]]*{"; then
+            in_server_block=true
+            server_block_matches=false
+            server_block_files=""
+            brace_depth=1
+        elif [ "$in_server_block" = true ]; then
+            # Count braces to track depth
+            local open_braces=$(echo "$line" | tr -cd '{' | wc -c | tr -d ' ')
+            local close_braces=$(echo "$line" | tr -cd '}' | wc -c | tr -d ' ')
+            brace_depth=$((brace_depth + open_braces - close_braces))
+
+            # Check for server_name matching this site
+            if echo "$line" | grep -q "server_name.*$site"; then
+                server_block_matches=true
+            fi
+
+            # Track files included in this server block
+            if [ -n "$current_file" ]; then
+                if ! echo "$server_block_files" | grep -q "$current_file"; then
+                    server_block_files="${server_block_files}${current_file}"$'\n'
+                fi
+            fi
+
+            # Check for include directives
+            if [[ "$line" =~ include[[:space:]]+([^;]+)\; ]]; then
+                local include_path="${BASH_REMATCH[1]}"
+                # Expand vhost.d includes with site name
+                if [[ "$include_path" =~ vhost\.d/$site ]]; then
+                    server_block_files="${server_block_files}${include_path}"$'\n'
+                fi
+            fi
+
+            # End of server block
+            if [ $brace_depth -eq 0 ]; then
+                in_server_block=false
+                if [ "$server_block_matches" = true ]; then
+                    relevant_files="${relevant_files}${server_block_files}"
+                fi
+            fi
+        fi
+    done <<< "$config"
+
+    # Add main nginx.conf if found
+    if [ -n "$main_nginx_conf" ]; then
+        relevant_files="${main_nginx_conf}"$'\n'"${relevant_files}"
+    fi
+
+    # Also check for vhost.d file matching site name
+    local vhost_file="${WP_TEST_NGINX}/vhost.d/${site}"
+    if [ -f "$vhost_file" ]; then
+        relevant_files="${relevant_files}${vhost_file}"$'\n'
+    fi
+
+    # Remove duplicates and empty lines
+    echo "$relevant_files" | sort -u | grep -v "^$"
+}
+
+# Check if a file is relevant to the current site filter
+# Args: $1 = file path
+# Returns: 0 if relevant, 1 if not
+is_file_relevant_to_site() {
+    local file="$1"
+
+    # If no site filtering, all files are relevant
+    if [ "$SITE_FILTERING_ACTIVE" = false ]; then
+        return 0
+    fi
+
+    # Check if file is in the relevant files list
+    if echo "$SITE_RELEVANT_FILES" | grep -qF "$file"; then
+        return 0
+    fi
+
+    return 1
+}
+
+# Check if directive exists in site-relevant config files
+# Args: $1 = pattern, $2 = site name (optional)
+# Sets LAST_DIRECTIVE_SOURCE if found
+check_directive_for_site() {
+    local pattern="$1"
+    local site="$2"
+
+    LAST_DIRECTIVE_SOURCE=""
+
+    # If no site specified or filtering not active, use normal check
+    if [ -z "$site" ] || [ "$SITE_FILTERING_ACTIVE" = false ]; then
+        if type -t get_directive_source &>/dev/null; then
+            LAST_DIRECTIVE_SOURCE=$(get_directive_source "$pattern")
+            if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
+                return 0
+            fi
+        fi
+        if check_nginx_compiled "$pattern"; then
+            return 0
+        fi
+        return 1
+    fi
+
+    # Site-filtered check: only look in relevant files
+    local config
+    if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "wp-test-proxy"; then
+        config=$(docker exec wp-test-proxy nginx -T 2>/dev/null)
+    else
+        config=$(get_nginx_compiled_config)
+    fi
+
+    if [ -z "$config" ]; then
+        return 1
+    fi
+
+    local current_file=""
+    local found=false
+
+    while IFS= read -r line; do
+        # Track current config file
+        if [[ "$line" =~ ^#.*configuration\ file\ ([^:]+):$ ]]; then
+            current_file="${BASH_REMATCH[1]}"
+        fi
+
+        # Check if this line matches pattern and file is relevant
+        if echo "$line" | grep -qE "$pattern"; then
+            if is_file_relevant_to_site "$current_file"; then
+                LAST_DIRECTIVE_SOURCE="$current_file"
+                found=true
+                break
+            fi
+        fi
+    done <<< "$config"
+
+    if [ "$found" = true ]; then
+        return 0
+    fi
+
+    return 1
+}
+
+# Initialize site filtering for a specific site
+# Args: $1 = site name
+init_site_filtering() {
+    local site="$1"
+
+    if [ -z "$site" ]; then
+        SITE_FILTERING_ACTIVE=false
+        SITE_RELEVANT_FILES=""
+        return
+    fi
+
+    log_info "Initializing site filtering for: $site"
+
+    # Use cached lookup (fast) instead of parsing config each time (slow)
+    SITE_RELEVANT_FILES=$(get_cached_site_files "$site")
+
+    if [ -z "$SITE_RELEVANT_FILES" ]; then
+        # Fallback to full parsing if cache miss
+        SITE_RELEVANT_FILES=$(get_site_config_files "$site")
+    fi
+
+    if [ -z "$SITE_RELEVANT_FILES" ]; then
+        log_warn "No config files found for site: $site"
+        SITE_FILTERING_ACTIVE=false
+    else
+        SITE_FILTERING_ACTIVE=true
+        log_info "Site filtering active for: $site"
+    fi
+}
+
+################################################################################
 # Configuration Analysis Functions
 ################################################################################
+
+# Format source path for display (shorten if needed)
+# Args: $1 = full path
+# Returns: shortened display path
+format_source_path() {
+    local path="$1"
+    if [ -z "$path" ]; then
+        echo ""
+        return
+    fi
+
+    # Extract last 2 path components for readability
+    # /etc/nginx/conf.d/security.conf -> conf.d/security.conf
+    # /etc/nginx/nginx.conf -> nginx.conf
+    # ~/.wp-test/nginx/vhost.d/site.conf -> vhost.d/site.conf
+
+    # Count the number of slashes
+    local slash_count=$(echo "$path" | tr -cd '/' | wc -c | tr -d ' ')
+
+    if [ "$slash_count" -ge 2 ]; then
+        # Extract last 2 components: dir/file.conf
+        echo "$path" | awk -F/ '{print $(NF-1)"/"$NF}'
+    else
+        # Just use basename for short paths
+        basename "$path"
+    fi
+}
 
 # Get cached nginx -T output (runs once, reuses thereafter)
 get_nginx_compiled_config() {
@@ -237,6 +589,11 @@ get_nginx_compiled_config() {
 reset_nginx_config_cache() {
     NGINX_COMPILED_CONFIG=""
     NGINX_CONFIG_CACHED=false
+
+    # Re-initialize parser if available
+    if type -t parser_init &>/dev/null; then
+        parser_init || log_warn "Parser re-initialization failed"
+    fi
 }
 
 # Check compiled nginx config using cached output (performance optimization)
@@ -277,39 +634,105 @@ analyze_docker_container() {
         return 1
     }
 
-    # Check each optimization
+    # Parse the config output to track source files (basic docker version)
+    local current_file=""
+    local http3_source=""
+    local cache_source=""
+    local brotli_source=""
+    local gzip_source=""
+    local hsts_source=""
+    local rate_source=""
+
+    while IFS= read -r line; do
+        # Track current config file
+        if [[ "$line" =~ ^#.*configuration\ file\ (.+):$ ]]; then
+            current_file="${BASH_REMATCH[1]}"
+        fi
+
+        # Track directives
+        if echo "$line" | grep -qiE "listen.*quic|http3" && [ -z "$http3_source" ]; then
+            http3_source="$current_file"
+        fi
+        if echo "$line" | grep -qi "fastcgi_cache" && [ -z "$cache_source" ]; then
+            cache_source="$current_file"
+        fi
+        if echo "$line" | grep -qi "brotli" && [ -z "$brotli_source" ]; then
+            brotli_source="$current_file"
+        fi
+        if echo "$line" | grep -qi "gzip on" && [ -z "$gzip_source" ]; then
+            gzip_source="$current_file"
+        fi
+        if echo "$line" | grep -qi "Strict-Transport-Security" && [ -z "$hsts_source" ]; then
+            hsts_source="$current_file"
+        fi
+        if echo "$line" | grep -qi "limit_req" && [ -z "$rate_source" ]; then
+            rate_source="$current_file"
+        fi
+    done <<< "$config"
+
+    # Display with sources
     if echo "$config" | grep -qiE "listen.*quic|http3"; then
-        echo -e "    ${GREEN}✓ HTTP/3 QUIC${NC}"
+        printf "    ${GREEN}✓${NC} %-22s" "HTTP/3 QUIC"
+        if [ -n "$http3_source" ]; then
+            echo " ($(format_source_path "$http3_source"))"
+        else
+            echo ""
+        fi
     else
         echo -e "    ${YELLOW}✗ HTTP/3 QUIC${NC}"
     fi
 
     if echo "$config" | grep -qi "fastcgi_cache"; then
-        echo -e "    ${GREEN}✓ FastCGI Cache${NC}"
+        printf "    ${GREEN}✓${NC} %-22s" "FastCGI Cache"
+        if [ -n "$cache_source" ]; then
+            echo " ($(format_source_path "$cache_source"))"
+        else
+            echo ""
+        fi
     else
         echo -e "    ${YELLOW}✗ FastCGI Cache${NC}"
     fi
 
     if echo "$config" | grep -qi "brotli"; then
-        echo -e "    ${GREEN}✓ Brotli Compression${NC}"
+        printf "    ${GREEN}✓${NC} %-22s" "Brotli Compression"
+        if [ -n "$brotli_source" ]; then
+            echo " ($(format_source_path "$brotli_source"))"
+        else
+            echo ""
+        fi
     else
         echo -e "    ${YELLOW}✗ Brotli Compression${NC}"
     fi
 
     if echo "$config" | grep -qi "gzip on"; then
-        echo -e "    ${GREEN}✓ Gzip Compression${NC}"
+        printf "    ${GREEN}✓${NC} %-22s" "Gzip Compression"
+        if [ -n "$gzip_source" ]; then
+            echo " ($(format_source_path "$gzip_source"))"
+        else
+            echo ""
+        fi
     else
         echo -e "    ${YELLOW}✗ Gzip Compression${NC}"
     fi
 
     if echo "$config" | grep -qi "Strict-Transport-Security"; then
-        echo -e "    ${GREEN}✓ Security Headers (HSTS)${NC}"
+        printf "    ${GREEN}✓${NC} %-22s" "Security Headers (HSTS)"
+        if [ -n "$hsts_source" ]; then
+            echo " ($(format_source_path "$hsts_source"))"
+        else
+            echo ""
+        fi
     else
         echo -e "    ${YELLOW}✗ Security Headers (HSTS)${NC}"
     fi
 
     if echo "$config" | grep -qi "limit_req"; then
-        echo -e "    ${GREEN}✓ Rate Limiting${NC}"
+        printf "    ${GREEN}✓${NC} %-22s" "Rate Limiting"
+        if [ -n "$rate_source" ]; then
+            echo " ($(format_source_path "$rate_source"))"
+        else
+            echo ""
+        fi
     else
         echo -e "    ${YELLOW}✗ Rate Limiting${NC}"
     fi
@@ -320,8 +743,26 @@ analyze_docker_container() {
 
 check_http3_enabled() {
     local config_file="$1"
+    local site_name="$2"
+    LAST_DIRECTIVE_SOURCE=""
 
-    # Check compiled config first (most reliable)
+    # Use site-filtered check if site specified
+    if [ -n "$site_name" ] && [ "$SITE_FILTERING_ACTIVE" = true ]; then
+        check_directive_for_site "listen.*quic" "$site_name"
+        return $?
+    fi
+
+    # Use new parser if available
+    if type -t get_directive_source &>/dev/null; then
+        local source
+        source=$(get_directive_source "listen.*quic")
+        if [ -n "$source" ]; then
+            LAST_DIRECTIVE_SOURCE="$source"
+            return 0
+        fi
+    fi
+
+    # Fallback: Check compiled config first (most reliable)
     if check_nginx_compiled "listen.*quic"; then
         return 0
     fi
@@ -336,8 +777,26 @@ check_http3_enabled() {
 
 check_fastcgi_cache_enabled() {
     local config_file="$1"
+    local site_name="$2"
+    LAST_DIRECTIVE_SOURCE=""
 
-    # Check compiled config first
+    # Use site-filtered check if site specified
+    if [ -n "$site_name" ] && [ "$SITE_FILTERING_ACTIVE" = true ]; then
+        check_directive_for_site "fastcgi_cache_path" "$site_name"
+        return $?
+    fi
+
+    # Use new parser if available
+    if type -t get_directive_source &>/dev/null; then
+        local source
+        source=$(get_directive_source "fastcgi_cache_path")
+        if [ -n "$source" ]; then
+            LAST_DIRECTIVE_SOURCE="$source"
+            return 0
+        fi
+    fi
+
+    # Fallback: Check compiled config first
     if check_nginx_compiled "fastcgi_cache_path"; then
         return 0
     fi
@@ -352,8 +811,26 @@ check_fastcgi_cache_enabled() {
 
 check_brotli_enabled() {
     local config_file="$1"
+    local site_name="$2"
+    LAST_DIRECTIVE_SOURCE=""
 
-    # Check compiled config first
+    # Use site-filtered check if site specified
+    if [ -n "$site_name" ] && [ "$SITE_FILTERING_ACTIVE" = true ]; then
+        check_directive_for_site "brotli on" "$site_name"
+        return $?
+    fi
+
+    # Use new parser if available
+    if type -t get_directive_source &>/dev/null; then
+        local source
+        source=$(get_directive_source "brotli on")
+        if [ -n "$source" ]; then
+            LAST_DIRECTIVE_SOURCE="$source"
+            return 0
+        fi
+    fi
+
+    # Fallback: Check compiled config first
     if check_nginx_compiled "brotli on"; then
         return 0
     fi
@@ -375,8 +852,26 @@ check_brotli_enabled() {
 
 check_security_headers() {
     local config_file="$1"
+    local site_name="$2"
+    LAST_DIRECTIVE_SOURCE=""
 
-    # Check compiled config first
+    # Use site-filtered check if site specified
+    if [ -n "$site_name" ] && [ "$SITE_FILTERING_ACTIVE" = true ]; then
+        check_directive_for_site "Strict-Transport-Security" "$site_name"
+        return $?
+    fi
+
+    # Use new parser if available
+    if type -t get_directive_source &>/dev/null; then
+        local source
+        source=$(get_directive_source "Strict-Transport-Security")
+        if [ -n "$source" ]; then
+            LAST_DIRECTIVE_SOURCE="$source"
+            return 0
+        fi
+    fi
+
+    # Fallback: Check compiled config first
     if check_nginx_compiled "Strict-Transport-Security"; then
         return 0
     fi
@@ -391,8 +886,26 @@ check_security_headers() {
 
 check_rate_limiting() {
     local config_file="$1"
+    local site_name="$2"
+    LAST_DIRECTIVE_SOURCE=""
 
-    # Check compiled config first
+    # Use site-filtered check if site specified
+    if [ -n "$site_name" ] && [ "$SITE_FILTERING_ACTIVE" = true ]; then
+        check_directive_for_site "limit_req_zone" "$site_name"
+        return $?
+    fi
+
+    # Use new parser if available
+    if type -t get_directive_source &>/dev/null; then
+        local source
+        source=$(get_directive_source "limit_req_zone")
+        if [ -n "$source" ]; then
+            LAST_DIRECTIVE_SOURCE="$source"
+            return 0
+        fi
+    fi
+
+    # Fallback: Check compiled config first
     if check_nginx_compiled "limit_req_zone"; then
         return 0
     fi
@@ -407,8 +920,26 @@ check_rate_limiting() {
 
 check_wordpress_exclusions() {
     local config_file="$1"
+    local site_name="$2"
+    LAST_DIRECTIVE_SOURCE=""
 
-    # Check compiled config first
+    # Use site-filtered check if site specified
+    if [ -n "$site_name" ] && [ "$SITE_FILTERING_ACTIVE" = true ]; then
+        check_directive_for_site "xmlrpc" "$site_name"
+        return $?
+    fi
+
+    # Use new parser if available
+    if type -t get_directive_source &>/dev/null; then
+        local source
+        source=$(get_directive_source "xmlrpc")
+        if [ -n "$source" ]; then
+            LAST_DIRECTIVE_SOURCE="$source"
+            return 0
+        fi
+    fi
+
+    # Fallback: Check compiled config first
     if check_nginx_compiled "xmlrpc"; then
         return 0
     fi
@@ -423,8 +954,26 @@ check_wordpress_exclusions() {
 
 check_gzip_enabled() {
     local config_file="$1"
+    local site_name="$2"
+    LAST_DIRECTIVE_SOURCE=""
 
-    # Check compiled config first
+    # Use site-filtered check if site specified
+    if [ -n "$site_name" ] && [ "$SITE_FILTERING_ACTIVE" = true ]; then
+        check_directive_for_site "gzip on" "$site_name"
+        return $?
+    fi
+
+    # Use new parser if available
+    if type -t get_directive_source &>/dev/null; then
+        local source
+        source=$(get_directive_source "gzip on")
+        if [ -n "$source" ]; then
+            LAST_DIRECTIVE_SOURCE="$source"
+            return 0
+        fi
+    fi
+
+    # Fallback: Check compiled config first
     if check_nginx_compiled "gzip on"; then
         return 0
     fi
@@ -455,8 +1004,26 @@ check_redis_configured() {
 
 check_ocsp_stapling() {
     local config_file="$1"
+    local site_name="$2"
+    LAST_DIRECTIVE_SOURCE=""
 
-    # Check compiled config first
+    # Use site-filtered check if site specified
+    if [ -n "$site_name" ] && [ "$SITE_FILTERING_ACTIVE" = true ]; then
+        check_directive_for_site "ssl_stapling on" "$site_name"
+        return $?
+    fi
+
+    # Use new parser if available
+    if type -t get_directive_source &>/dev/null; then
+        local source
+        source=$(get_directive_source "ssl_stapling on")
+        if [ -n "$source" ]; then
+            LAST_DIRECTIVE_SOURCE="$source"
+            return 0
+        fi
+    fi
+
+    # Fallback: Check compiled config first
     if check_nginx_compiled "ssl_stapling on"; then
         return 0
     fi
@@ -471,15 +1038,266 @@ check_ocsp_stapling() {
 
 check_tls_versions() {
     local config_file="$1"
+    local site_name="$2"
     local tls_versions=""
+    LAST_DIRECTIVE_SOURCE=""
 
-    # Check for TLSv1.3 (modern)
-    if check_nginx_compiled "TLSv1.3" || ([ -f "$config_file" ] && grep -q "TLSv1.3" "$config_file" 2>/dev/null); then
-        tls_versions="1.3"
+    # Use site-filtered check if site specified
+    if [ -n "$site_name" ] && [ "$SITE_FILTERING_ACTIVE" = true ]; then
+        if check_directive_for_site "TLSv1.3" "$site_name"; then
+            tls_versions="1.3"
+        fi
+    else
+        # Use new parser if available for TLSv1.3
+        if type -t get_directive_source &>/dev/null; then
+            local source
+            source=$(get_directive_source "TLSv1.3")
+            if [ -n "$source" ]; then
+                LAST_DIRECTIVE_SOURCE="$source"
+                tls_versions="1.3"
+            fi
+        fi
+
+        # Fallback for TLSv1.3 check
+        if [ -z "$tls_versions" ]; then
+            if check_nginx_compiled "TLSv1.3" || ([ -f "$config_file" ] && grep -q "TLSv1.3" "$config_file" 2>/dev/null); then
+                tls_versions="1.3"
+            fi
+        fi
     fi
 
     # Check for TLSv1.2 (acceptable)
-    if check_nginx_compiled "TLSv1.2" || ([ -f "$config_file" ] && grep -q "TLSv1.2" "$config_file" 2>/dev/null); then
+    if [ -n "$site_name" ] && [ "$SITE_FILTERING_ACTIVE" = true ]; then
+        if check_directive_for_site "TLSv1.2" "$site_name"; then
+            if [ -n "$tls_versions" ]; then
+                tls_versions="${tls_versions}, 1.2"
+            else
+                tls_versions="1.2"
+            fi
+        fi
+    else
+        if check_nginx_compiled "TLSv1.2" || ([ -f "$config_file" ] && grep -q "TLSv1.2" "$config_file" 2>/dev/null); then
+            if [ -n "$tls_versions" ]; then
+                tls_versions="${tls_versions}, 1.2"
+            else
+                tls_versions="1.2"
+            fi
+        fi
+    fi
+
+    echo "$tls_versions"
+}
+
+################################################################################
+# Per-Site Analysis Functions
+################################################################################
+
+# Check if feature exists for a specific site
+# Args: $1 = pattern (regex)
+#       $2 = site name
+#       $3 = config file
+# Returns: 0 if found, 1 if not
+check_feature_for_site() {
+    local pattern="$1"
+    local site_name="$2"
+    local config_file="$3"
+
+    LAST_DIRECTIVE_SOURCE=""
+
+    # Strategy 1: Use parser to check in site's config file directly
+    if type -t directive_exists_in_file &>/dev/null; then
+        if directive_exists_in_file "$config_file" "$pattern"; then
+            LAST_DIRECTIVE_SOURCE="$config_file"
+            return 0
+        fi
+    fi
+
+    # Strategy 2: Check in files included by site's server block (via site filtering)
+    if [ "$SITE_FILTERING_ACTIVE" = true ]; then
+        if check_directive_for_site "$pattern" "$site_name"; then
+            return 0
+        fi
+    fi
+
+    # Strategy 3: For global features (gzip, brotli in http block),
+    # check if defined globally in main nginx.conf
+    local main_nginx_conf=""
+    if type -t list_parsed_files &>/dev/null; then
+        main_nginx_conf=$(list_parsed_files | grep "nginx\.conf$" | head -n1)
+    fi
+
+    if [ -n "$main_nginx_conf" ] && type -t directive_exists_in_file &>/dev/null; then
+        if directive_exists_in_file "$main_nginx_conf" "$pattern"; then
+            LAST_DIRECTIVE_SOURCE="$main_nginx_conf"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+# Display score bar for a single site
+# Args: $1 = enabled count, $2 = total count
+show_site_score() {
+    local enabled=$1
+    local total=$2
+
+    if [ "$total" -eq 0 ]; then
+        echo -e "${YELLOW}0/0 (0%)${NC}"
+        return
+    fi
+
+    local percent=$(( (enabled * 100 + total / 2) / total ))
+    local color
+
+    if (( percent >= 80 )); then
+        color=$GREEN
+    elif (( percent >= 50 )); then
+        color=$YELLOW
+    else
+        color=$RED
+    fi
+
+    echo -e "${color}${enabled}/${total} (${percent}%)${NC}"
+}
+
+# Analyze optimizations for a single site
+# Args: $1 = site name (e.g., "mysite.com")
+#       $2 = config file path (e.g., "/etc/nginx/sites-enabled/mysite.conf")
+# Outputs: Feature checklist with per-site score
+# Returns: 0 on success
+analyze_single_site() {
+    local site_name="$1"
+    local config_file="$2"
+
+    # Reset score for this site
+    local site_score_enabled=0
+    local site_score_total=0
+
+    echo ""
+    echo "═══════════════════════════════════════════════════════════"
+    echo "Site: $site_name ($(format_source_path "$config_file"))"
+    echo "═══════════════════════════════════════════════════════════"
+
+    # Initialize site filtering for this specific site
+    init_site_filtering "$site_name"
+
+    # HTTP/3 QUIC - per-site (check in site's server block)
+    if check_feature_for_site "listen.*quic" "$site_name" "$config_file"; then
+        printf "    ${GREEN}✓${NC} %-22s" "HTTP/3 QUIC"
+        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
+            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
+        else
+            echo ""
+        fi
+        site_score_enabled=$((site_score_enabled + 1))
+    else
+        printf "    ${YELLOW}✗${NC} %-22s\n" "HTTP/3 QUIC"
+    fi
+    site_score_total=$((site_score_total + 1))
+
+    # FastCGI Cache - per-site
+    if check_feature_for_site "fastcgi_cache" "$site_name" "$config_file"; then
+        printf "    ${GREEN}✓${NC} %-22s" "FastCGI Cache"
+        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
+            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
+        else
+            echo ""
+        fi
+        site_score_enabled=$((site_score_enabled + 1))
+    else
+        printf "    ${YELLOW}✗${NC} %-22s\n" "FastCGI Cache"
+    fi
+    site_score_total=$((site_score_total + 1))
+
+    # Brotli - can be global
+    if check_feature_for_site "brotli on" "$site_name" "$config_file"; then
+        printf "    ${GREEN}✓${NC} %-22s" "Brotli Compression"
+        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
+            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
+        else
+            echo ""
+        fi
+        site_score_enabled=$((site_score_enabled + 1))
+    else
+        printf "    ${YELLOW}✗${NC} %-22s\n" "Brotli Compression"
+    fi
+    site_score_total=$((site_score_total + 1))
+
+    # Gzip - can be global
+    if check_feature_for_site "gzip on" "$site_name" "$config_file"; then
+        printf "    ${GREEN}✓${NC} %-22s" "Gzip Compression"
+        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
+            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
+        else
+            echo ""
+        fi
+        site_score_enabled=$((site_score_enabled + 1))
+    else
+        printf "    ${YELLOW}✗${NC} %-22s\n" "Gzip Compression"
+    fi
+    site_score_total=$((site_score_total + 1))
+
+    # Security Headers - per-site
+    if check_feature_for_site "Strict-Transport-Security" "$site_name" "$config_file"; then
+        printf "    ${GREEN}✓${NC} %-22s" "Security Headers"
+        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
+            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
+        else
+            echo ""
+        fi
+        site_score_enabled=$((site_score_enabled + 1))
+    else
+        printf "    ${YELLOW}✗${NC} %-22s\n" "Security Headers"
+    fi
+    site_score_total=$((site_score_total + 1))
+
+    # Rate Limiting - per-site
+    if check_feature_for_site "limit_req" "$site_name" "$config_file"; then
+        printf "    ${GREEN}✓${NC} %-22s" "Rate Limiting"
+        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
+            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
+        else
+            echo ""
+        fi
+        site_score_enabled=$((site_score_enabled + 1))
+    else
+        printf "    ${YELLOW}✗${NC} %-22s\n" "Rate Limiting"
+    fi
+    site_score_total=$((site_score_total + 1))
+
+    # WordPress Exclusions - per-site
+    if check_feature_for_site "xmlrpc" "$site_name" "$config_file"; then
+        printf "    ${GREEN}✓${NC} %-22s" "WordPress Exclusions"
+        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
+            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
+        else
+            echo ""
+        fi
+        site_score_enabled=$((site_score_enabled + 1))
+    else
+        printf "    ${YELLOW}✗${NC} %-22s\n" "WordPress Exclusions"
+    fi
+    site_score_total=$((site_score_total + 1))
+
+    # OCSP Stapling - per-site (no score)
+    if check_feature_for_site "ssl_stapling on" "$site_name" "$config_file"; then
+        printf "    ${GREEN}✓${NC} %-22s" "OCSP Stapling"
+        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
+            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
+        else
+            echo ""
+        fi
+    else
+        printf "    ${YELLOW}✗${NC} %-22s\n" "OCSP Stapling"
+    fi
+
+    # TLS Versions - per-site (no score)
+    local tls_versions=""
+    if check_feature_for_site "TLSv1.3" "$site_name" "$config_file"; then
+        tls_versions="1.3"
+    fi
+    if check_feature_for_site "TLSv1.2" "$site_name" "$config_file"; then
         if [ -n "$tls_versions" ]; then
             tls_versions="${tls_versions}, 1.2"
         else
@@ -487,82 +1305,165 @@ check_tls_versions() {
         fi
     fi
 
-    echo "$tls_versions"
+    if [ -n "$tls_versions" ]; then
+        if echo "$tls_versions" | grep -q "1.3"; then
+            printf "    ${GREEN}✓${NC} %-22s" "TLS Versions: ${tls_versions}"
+            if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
+                echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
+            else
+                echo ""
+            fi
+        else
+            echo -e "    ${YELLOW}✓ TLS Versions: ${tls_versions} (1.3 recommended)${NC}"
+        fi
+    else
+        echo -e "    ${YELLOW}✗ TLS Versions: not configured${NC}"
+    fi
+
+    # Show site score
+    echo ""
+    printf "    Score: "
+    show_site_score "$site_score_enabled" "$site_score_total"
+    echo ""
 }
+
+################################################################################
+# Legacy Analysis Functions (kept for backward compatibility)
+################################################################################
 
 analyze_config_file() {
     local config_file="$1"
     local instance_name="$2"
+    local site_name="$3"
 
-    log_info "Analyzing: $instance_name ($config_file)"
+    # Show filtering indicator if active
+    if [ "$SITE_FILTERING_ACTIVE" = true ]; then
+        log_info "Analyzing: $instance_name (filtered view for $site_name)"
+    else
+        log_info "Analyzing: $instance_name"
+    fi
 
-    if check_http3_enabled "$config_file"; then
-        echo -e "    ${GREEN}✓ HTTP/3 QUIC${NC}"
+    # HTTP/3 QUIC
+    if check_http3_enabled "$config_file" "$site_name"; then
+        printf "    ${GREEN}✓${NC} %-22s" "HTTP/3 QUIC"
+        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
+            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
+        else
+            echo ""
+        fi
         increment_score 1
     else
         echo -e "    ${YELLOW}✗ HTTP/3 QUIC${NC}"
         increment_score 0
     fi
 
-    if check_fastcgi_cache_enabled "$config_file"; then
-        echo -e "    ${GREEN}✓ FastCGI Cache${NC}"
+    # FastCGI Cache
+    if check_fastcgi_cache_enabled "$config_file" "$site_name"; then
+        printf "    ${GREEN}✓${NC} %-22s" "FastCGI Cache"
+        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
+            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
+        else
+            echo ""
+        fi
         increment_score 1
     else
         echo -e "    ${YELLOW}✗ FastCGI Cache${NC}"
         increment_score 0
     fi
 
-    if check_brotli_enabled "$config_file"; then
-        echo -e "    ${GREEN}✓ Brotli Compression${NC}"
+    # Brotli Compression
+    if check_brotli_enabled "$config_file" "$site_name"; then
+        printf "    ${GREEN}✓${NC} %-22s" "Brotli Compression"
+        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
+            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
+        else
+            echo ""
+        fi
         increment_score 1
     else
         echo -e "    ${YELLOW}✗ Brotli Compression${NC}"
         increment_score 0
     fi
 
-    if check_gzip_enabled "$config_file"; then
-        echo -e "    ${GREEN}✓ Gzip Compression${NC}"
+    # Gzip Compression
+    if check_gzip_enabled "$config_file" "$site_name"; then
+        printf "    ${GREEN}✓${NC} %-22s" "Gzip Compression"
+        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
+            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
+        else
+            echo ""
+        fi
         increment_score 1
     else
         echo -e "    ${YELLOW}✗ Gzip Compression${NC}"
         increment_score 0
     fi
 
-    if check_security_headers "$config_file"; then
-        echo -e "    ${GREEN}✓ Security Headers${NC}"
+    # Security Headers
+    if check_security_headers "$config_file" "$site_name"; then
+        printf "    ${GREEN}✓${NC} %-22s" "Security Headers"
+        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
+            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
+        else
+            echo ""
+        fi
         increment_score 1
     else
         echo -e "    ${YELLOW}✗ Security Headers${NC}"
         increment_score 0
     fi
 
-    if check_rate_limiting "$config_file"; then
-        echo -e "    ${GREEN}✓ Rate Limiting${NC}"
+    # Rate Limiting
+    if check_rate_limiting "$config_file" "$site_name"; then
+        printf "    ${GREEN}✓${NC} %-22s" "Rate Limiting"
+        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
+            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
+        else
+            echo ""
+        fi
         increment_score 1
     else
         echo -e "    ${YELLOW}✗ Rate Limiting${NC}"
         increment_score 0
     fi
 
-    if check_wordpress_exclusions "$config_file"; then
-        echo -e "    ${GREEN}✓ WordPress Exclusions${NC}"
+    # WordPress Exclusions
+    if check_wordpress_exclusions "$config_file" "$site_name"; then
+        printf "    ${GREEN}✓${NC} %-22s" "WordPress Exclusions"
+        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
+            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
+        else
+            echo ""
+        fi
         increment_score 1
     else
         echo -e "    ${YELLOW}✗ WordPress Exclusions${NC}"
         increment_score 0
     fi
 
-    if check_ocsp_stapling "$config_file"; then
-        echo -e "    ${GREEN}✓ OCSP Stapling${NC}"
+    # OCSP Stapling (no score)
+    if check_ocsp_stapling "$config_file" "$site_name"; then
+        printf "    ${GREEN}✓${NC} %-22s" "OCSP Stapling"
+        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
+            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
+        else
+            echo ""
+        fi
     else
         echo -e "    ${YELLOW}✗ OCSP Stapling${NC}"
     fi
 
+    # TLS Versions (no score)
     local tls_versions
-    tls_versions=$(check_tls_versions "$config_file")
+    tls_versions=$(check_tls_versions "$config_file" "$site_name")
     if [ -n "$tls_versions" ]; then
         if echo "$tls_versions" | grep -q "1.3"; then
-            echo -e "    ${GREEN}✓ TLS Versions: ${tls_versions}${NC}"
+            printf "    ${GREEN}✓${NC} %-22s" "TLS Versions: ${tls_versions}"
+            if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
+                echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
+            else
+                echo ""
+            fi
         else
             echo -e "    ${YELLOW}✓ TLS Versions: ${tls_versions} (1.3 recommended)${NC}"
         fi
@@ -603,7 +1504,16 @@ analyze_wp_test_site() {
     local site_name="$1"
     local site_dir="$2"
 
-    log_info "Analyzing wp-test site: $site_name"
+    # Initialize site filtering if this is a specific site analysis
+    if [ -n "$site_name" ]; then
+        init_site_filtering "$site_name"
+    fi
+
+    if [ "$SITE_FILTERING_ACTIVE" = true ]; then
+        log_info "Analyzing wp-test site: $site_name (filtered view)"
+    else
+        log_info "Analyzing wp-test site: $site_name"
+    fi
 
     # Check nginx proxy config (only analyze once across all sites)
     local proxy_conf="${WP_TEST_NGINX}/proxy.conf"
@@ -611,15 +1521,21 @@ analyze_wp_test_site() {
         if is_already_analyzed "$proxy_conf"; then
             log_info "  (Proxy config already analyzed above)"
         else
-            analyze_config_file "$proxy_conf" "Shared Proxy Config"
-            mark_as_analyzed "$proxy_conf"
+            # Only analyze if not filtered OR if this file is relevant
+            if [ "$SITE_FILTERING_ACTIVE" = false ] || is_file_relevant_to_site "$proxy_conf"; then
+                analyze_config_file "$proxy_conf" "Shared Proxy Config" "$site_name"
+                mark_as_analyzed "$proxy_conf"
+            fi
         fi
     fi
 
     # Check vhost config (unique per site)
     local vhost_conf="${WP_TEST_NGINX}/vhost.d/${site_name}"
     if [ -f "$vhost_conf" ]; then
-        analyze_config_file "$vhost_conf" "VHost Config ($site_name)"
+        # Always analyze vhost file for the target site
+        if [ "$SITE_FILTERING_ACTIVE" = false ] || is_file_relevant_to_site "$vhost_conf"; then
+            analyze_config_file "$vhost_conf" "VHost Config ($site_name)" "$site_name"
+        fi
     else
         log_info "  No custom vhost config for $site_name"
     fi
@@ -644,49 +1560,99 @@ analyze_wp_test_site() {
 analyze_optimizations() {
     local target_site="$1"
 
-    # Reset tracking for new analysis
-    reset_score
-    reset_analyzed_files
+    # If target_site specified, only analyze that site using per-site view
+    if [ -n "$target_site" ]; then
+        # Initialize parser for Docker config if needed
+        if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "wp-test-proxy"; then
+            if type -t parse_docker_nginx_config &>/dev/null; then
+                parse_docker_nginx_config "wp-test-proxy" || log_warn "Could not parse Docker nginx config"
+            fi
+        fi
 
+        # Get site's config file from parser
+        if type -t extract_all_sites &>/dev/null; then
+            local sites
+            sites=$(extract_all_sites)
+
+            local found=false
+            local site_config=""
+
+            while IFS='|' read -r site_name config_file ssl_status; do
+                if [ "$site_name" = "$target_site" ]; then
+                    site_config="$config_file"
+                    found=true
+                    break
+                fi
+            done <<< "$sites"
+
+            if [ "$found" = true ]; then
+                analyze_single_site "$target_site" "$site_config"
+
+                echo ""
+                echo "═══════════════════════════════════════════════════════════"
+                echo "Legend:"
+                echo -e "  ${GREEN}✓${NC} = Enabled"
+                echo -e "  ${YELLOW}✗${NC} = Missing (can be optimized)"
+                echo "═══════════════════════════════════════════════════════════"
+                return 0
+            else
+                log_error "Site not found in nginx config: $target_site"
+                return 1
+            fi
+        fi
+    fi
+
+    # Otherwise, extract ALL sites and analyze each
     echo ""
     echo "═══════════════════════════════════════════════════════════"
-    echo "Configuration Analysis:"
+    echo "Per-Site Configuration Analysis"
     echo "═══════════════════════════════════════════════════════════"
+
+    # Initialize parser for Docker config if needed
+    if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "wp-test-proxy"; then
+        if type -t parse_docker_nginx_config &>/dev/null; then
+            parse_docker_nginx_config "wp-test-proxy" || log_warn "Could not parse Docker nginx config"
+        fi
+    fi
+
+    # Pre-build site filter cache ONCE (major performance optimization)
+    # This parses config once upfront, then each site uses instant cache lookup
+    build_site_filter_cache
+
+    # Get all sites from parser
+    local sites
+    if type -t extract_all_sites &>/dev/null; then
+        sites=$(extract_all_sites)
+    else
+        log_error "extract_all_sites function not available"
+        return 1
+    fi
+
+    if [ -z "$sites" ]; then
+        log_warn "No sites found in nginx configuration"
+        echo ""
+        echo "═══════════════════════════════════════════════════════════"
+        echo "No sites to analyze"
+        echo "═══════════════════════════════════════════════════════════"
+        return 1
+    fi
+
+    local total_sites=0
+
+    # Iterate through each unique site
+    while IFS='|' read -r site_name config_file ssl_status; do
+        # Skip empty lines
+        [ -z "$site_name" ] && continue
+
+        analyze_single_site "$site_name" "$config_file"
+        total_sites=$((total_sites + 1))
+    done <<< "$sites"
+
+    # Show summary
     echo ""
-
-    for entry in "${DETECTED_INSTANCES[@]}"; do
-        local type
-        local name
-        local path
-        type=$(echo "$entry" | cut -d: -f1)
-        name=$(echo "$entry" | cut -d: -f2)
-        path=$(echo "$entry" | cut -d: -f3-)
-
-        case "$type" in
-            wp_test)
-                analyze_wp_test_site "$name" "$path"
-                ;;
-            wp_test_nginx)
-                analyze_config_file "$path" "wp-test nginx ($name)"
-                ;;
-            system)
-                analyze_config_file "$path" "System Nginx"
-                ;;
-            docker)
-                analyze_docker_container "$name" || {
-                    log_warn "Could not analyze Docker container: $name"
-                    echo ""
-                }
-                ;;
-        esac
-    done
-
-    # Show optimization score summary
     echo "═══════════════════════════════════════════════════════════"
-    echo "Optimization Score:"
-    echo -n "  "
-    show_optimization_score "$SCORE_ENABLED" "$SCORE_TOTAL"
-    echo ""
+    echo "Summary: $total_sites sites analyzed"
+    echo "═══════════════════════════════════════════════════════════"
     echo "Legend:"
     echo -e "  ${GREEN}✓${NC} = Enabled"
     echo -e "  ${YELLOW}✗${NC} = Missing (can be optimized)"
@@ -752,15 +1718,4 @@ show_status() {
     reset_score
     detect_nginx_instances "$target_site"
     analyze_optimizations "$target_site"
-
-    echo "═══════════════════════════════════════════════════════════"
-    echo "Optimization Score:"
-    echo -n "  "
-    show_optimization_score "$SCORE_ENABLED" "$SCORE_TOTAL"
-    echo ""
-    echo "Legend:"
-    echo -e "  ${GREEN}✓${NC} = Enabled"
-    echo -e "  ${YELLOW}✗${NC} = Missing (can be optimized)"
-    echo "═══════════════════════════════════════════════════════════"
 }
-
