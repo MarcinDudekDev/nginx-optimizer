@@ -1,6 +1,10 @@
 # nginx-optimizer
 
+[![CI](https://github.com/MarcinDudekDev/nginx-optimizer/actions/workflows/ci.yml/badge.svg)](https://github.com/MarcinDudekDev/nginx-optimizer/actions/workflows/ci.yml)
+
 Comprehensive NGINX optimization tool with HTTP/3, Brotli, FastCGI cache, Redis, security headers, and WordPress-specific optimizations.
+
+**Version:** 0.9.0-beta | **Status:** Beta (production-ready for WordPress sites)
 
 ## Installation
 
@@ -54,6 +58,11 @@ The nginx-optimizer correctly applies HTTP/3 (QUIC) configuration and the server
 
 ## Quick Start
 
+### Interactive Mode (Recommended)
+```bash
+nginx-optimizer  # Launches interactive wizard
+```
+
 ### Analyze Current Setup
 ```bash
 nginx-optimizer analyze
@@ -103,6 +112,7 @@ nginx-optimizer optimize --exclude brotli
 | `--feature <name>` | Apply specific feature only |
 | `--exclude <name>` | Skip specific feature |
 | `--backup-dir <path>` | Custom backup location |
+| `--quiet` | Suppress output (for scripting) |
 | `-v, --version` | Show version |
 
 ## Available Features
@@ -234,12 +244,8 @@ Expected performance gains:
 
 ## Troubleshooting
 
-### Bash Version (macOS)
-If you see "declare: -A: invalid option", upgrade to bash 4+:
-```bash
-brew install bash
-# Then use: /usr/local/bin/bash nginx-optimizer
-```
+### Bash Version
+nginx-optimizer supports bash 3.2+ (macOS default) and bash 4+/5+. No special installation needed.
 
 ### Permission Denied
 Some operations require sudo:
@@ -283,13 +289,20 @@ Add to cron for automatic updates:
 0 3 * * * ~/.nginx-optimizer/templates/bot-blocker-update.sh
 ```
 
-## Security Notes
+## Security
 
+See [SECURITY.md](SECURITY.md) for:
+- Vulnerability disclosure process
+- Security considerations
+- Best practices
+
+**Built-in protections:**
 - All sensitive files (wp-config.php, .env) are protected
 - xmlrpc.php is blocked by default
-- Rate limiting prevents brute force attacks
+- Rate limiting prevents brute force attacks (with burst handling)
 - Security headers provide XSS/clickjacking protection
 - HSTS enforces HTTPS connections
+- Automatic health checks after optimization
 
 ## Support
 
@@ -300,8 +313,12 @@ For issues or questions:
 
 ## Version
 
-nginx-optimizer v1.0.0
+nginx-optimizer v0.9.0-beta
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## License
 
-Created for use with wp-test and general nginx optimization.
+MIT License - Created for use with wp-test and general nginx optimization.

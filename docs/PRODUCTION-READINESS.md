@@ -512,23 +512,32 @@ After Path B: v1.0.0 (production ready)
 - [x] Enhance test suite with pipefail handling (23 tests passing)
 - [x] CI workflow passes on Ubuntu + macOS
 
-### Next Priority - Phase 3: UX & Safety
+### Completed - Phase 3 (2025-01-09)
+- [x] Add wizard mode when no args provided (like certbot)
+- [x] Fix fastcgi cache path (/var/run → /var/cache/nginx)
+- [x] Add automatic health check after optimization
+- [x] Add fastcgi_cache_lock to prevent cache stampede
+- [x] Add burst parameter documentation to rate limiting config
+- [x] Add timeout to nginx -t calls (30s wrapper)
+- [x] Create SECURITY.md with disclosure process
+- [ ] Add automatic rollback if nginx fails to start (partial - needs enhancement)
+- [ ] Add --check mode (validate without changing) (deferred)
+
+### Next Priority - Phase 4: Documentation & Distribution
 ```
-1. [ ] Add wizard mode when no args provided (like certbot)
-2. [ ] Fix fastcgi cache path (/var/run → /var/cache/nginx)
-3. [ ] Add automatic health check after optimization
-4. [ ] Add automatic rollback if nginx fails to start
-5. [ ] Add --check mode (validate without changing)
-6. [ ] Add burst parameter to rate limiting config
-7. [ ] Add timeout to nginx -t calls
-8. [ ] Create SECURITY.md with disclosure process
+1. [ ] CONTRIBUTING.md with development guidelines
+2. [ ] Man page (nginx-optimizer.1)
+3. [ ] One-liner install script (curl | bash style)
+4. [ ] Homebrew formula
+5. [ ] Issue templates (.github/ISSUE_TEMPLATE/)
+6. [ ] PR template (.github/PULL_REQUEST_TEMPLATE.md)
 ```
 
-### Future - Phase 4: Documentation & Distribution
+### Future - Phase 5: Advanced Features
 ```
-1. [ ] Interactive wizard with feature selection
-2. [ ] Man page (nginx-optimizer.1)
-3. [ ] Homebrew formula
-4. [ ] One-liner install script
-5. [ ] CONTRIBUTING.md
+1. [ ] Interactive wizard with feature selection menu
+2. [ ] JSON output mode (--json)
+3. [ ] Self-update command
+4. [ ] APT/RPM packages
+5. [ ] Ansible role
 ```
