@@ -541,9 +541,15 @@ After Path B: v1.0.0 (production ready)
 
 ### Future - Phase 6: Nice-to-Have
 ```
-1. [ ] Interactive wizard with feature selection menu
-2. [ ] Full JSON output (not placeholder)
-3. [ ] APT/RPM packages
-4. [ ] Ansible role
-5. [ ] Terraform provider
+1. [ ] Per-site detection and analysis (scan sites-enabled/, conf.d/)
+2. [ ] Interactive wizard with feature selection menu
+3. [ ] Full JSON output (not placeholder)
+4. [ ] APT/RPM packages
+5. [ ] Ansible role
+6. [ ] Terraform provider
 ```
+
+### Known Issues (from testing on anna152)
+- Analyzer shows nginx instance but doesn't enumerate individual sites
+- Sites in /etc/nginx/sites-enabled/ not listed (7 sites exist but not shown)
+- Need to scan sites-enabled/ and conf.d/ directories for per-site analysis
