@@ -499,17 +499,22 @@ After Path B: v1.0.0 (production ready)
 
 ## 14. NEXT SESSION ACTION ITEMS
 
-When you're ready to work on this, here's the priority order:
+### Completed (2025-01-09)
+- [x] Fix bash 3.2: Remove declare -A, add version check at startup
+- [x] Fix GNU find: Replace -printf with portable alternatives
+- [x] Fix flock: Replace with portable mkdir-based locking
+- [x] Install shellcheck in CI
+- [x] Create tests/configs/ corpus with 12 real nginx configs
+- [x] Add test runner script (15 tests passing)
 
+### Next Priority
 ```
-1. [ ] Fix bash 3.2: Remove declare -A, add version check at startup
-2. [ ] Fix GNU find: Replace -printf with portable alternatives
-3. [ ] Install shellcheck in CI, fix all warnings
-4. [ ] Create tests/configs/ corpus with 20+ real nginx configs
-5. [ ] Add BATS test: "optimize doesn't break valid configs"
-6. [ ] Add BATS test: "running twice is idempotent"
-7. [ ] Add wizard mode when no args provided
-8. [ ] Update version to 0.9.0
-9. [ ] Write CHANGELOG.md
-10. [ ] Announce as beta, gather feedback
+1. [ ] Fix remaining 139 shellcheck warnings (SC2155 etc)
+2. [ ] Add BATS test: "optimize doesn't break valid configs"
+3. [ ] Add BATS test: "running twice is idempotent"
+4. [ ] Add wizard mode when no args provided
+5. [ ] Update version to 0.9.0-beta
+6. [ ] Write CHANGELOG.md
+7. [ ] Fix fastcgi cache path (/var/run → persistent location)
+8. [ ] Add --check dry-run mode
 ```

@@ -18,7 +18,8 @@ reset_applied_optimizations() {
 # Validate nginx config paths to prevent directory traversal
 validate_nginx_config_path() {
     local path="$1"
-    local resolved=$(realpath "$path" 2>/dev/null)
+    local resolved
+    resolved=$(realpath "$path" 2>/dev/null)
 
     # Must resolve successfully
     [[ -z "$resolved" ]] && return 1
@@ -45,7 +46,8 @@ is_safe_config_file() {
 
     # If symlink, resolve and validate target
     if [[ -L "$file" ]]; then
-        local target=$(readlink -f "$file" 2>/dev/null)
+        local target
+        target=$(readlink -f "$file" 2>/dev/null)
         [[ -z "$target" ]] && return 1
 
         # Target must be regular file
@@ -76,8 +78,10 @@ atomic_write_file() {
     local source="$2"
 
     # Create temp file in same directory as target (ensures same filesystem)
-    local target_dir=$(dirname "$target_path")
-    local temp_file=$(mktemp "${target_dir}/.nginx-opt.XXXXXX")
+    local target_dir
+    target_dir=$(dirname "$target_path")
+    local temp_file
+    temp_file=$(mktemp "${target_dir}/.nginx-opt.XXXXXX")
 
     # Copy content to temp file
     if [ -f "$source" ]; then
@@ -116,8 +120,10 @@ transaction_add_file() {
     fi
 
     # Create temp file in same directory
-    local target_dir=$(dirname "$original_path")
-    local temp_file=$(mktemp "${target_dir}/.nginx-opt-txn.XXXXXX")
+    local target_dir
+    target_dir=$(dirname "$original_path")
+    local temp_file
+    temp_file=$(mktemp "${target_dir}/.nginx-opt-txn.XXXXXX")
 
     # Copy original if it exists
     if [ -f "$original_path" ]; then
@@ -299,7 +305,8 @@ inject_server_includes() {
     local -a temp_files=()
     for site_conf in "${files_to_modify[@]}"; do
         # Add to transaction
-        local temp_file=$(transaction_add_file "$site_conf")
+        local temp_file
+        temp_file=$(transaction_add_file "$site_conf")
         temp_files+=("$temp_file")
 
         # SECURITY FIX: Use awk to inject after first UNCOMMENTED server block
@@ -486,7 +493,8 @@ optimize_http3() {
 
     # Check nginx version
     if command -v nginx &>/dev/null; then
-        local version=$(nginx -v 2>&1 | sed -n 's/.*nginx\/\([0-9.]*\).*/\1/p')
+        local version
+        version=$(nginx -v 2>&1 | sed -n 's/.*nginx\/\([0-9.]*\).*/\1/p')
 
         if ! awk -v ver="$version" 'BEGIN { if (ver >= 1.25) exit 0; else exit 1 }'; then
             log_warn "HTTP/3 requires nginx >= 1.25.0 (current: $version)"
@@ -508,7 +516,8 @@ optimize_http3() {
         # Apply to all wp-test sites
         for site_dir in "$WP_TEST_SITES"/*; do
             if [ -d "$site_dir" ]; then
-                local site=$(basename "$site_dir")
+                local site
+                site=$(basename "$site_dir")
                 apply_http3_wp_test "$site"
             fi
         done
@@ -714,7 +723,8 @@ optimize_fastcgi_cache() {
     elif [ -z "$target_site" ]; then
         for site_dir in "$WP_TEST_SITES"/*; do
             if [ -d "$site_dir" ]; then
-                local site=$(basename "$site_dir")
+                local site
+                site=$(basename "$site_dir")
                 apply_fastcgi_cache_wp_test "$site"
             fi
         done
@@ -842,7 +852,8 @@ optimize_redis() {
     elif [ -z "$target_site" ]; then
         for site_dir in "$WP_TEST_SITES"/*; do
             if [ -d "$site_dir" ]; then
-                local site=$(basename "$site_dir")
+                local site
+                site=$(basename "$site_dir")
                 apply_redis_wp_test "$site"
             fi
         done
@@ -1121,9 +1132,11 @@ apply_security_config() {
 
         # Update site-specific files to include default
         # nginx-proxy uses site-specific file INSTEAD of default if it exists
+        local filename
+        local temp_file
         for site_file in "$vhost_dir"/*; do
             [ -f "$site_file" ] || continue
-            local filename=$(basename "$site_file")
+            filename=$(basename "$site_file")
 
             # Skip default, default_location, and hidden files
             [[ "$filename" == "default" ]] && continue
@@ -1139,7 +1152,7 @@ apply_security_config() {
 
             # Add include directive at the beginning
             log_info "Updating $filename to include default..."
-            local temp_file=$(mktemp)
+            temp_file=$(mktemp)
             echo "# Include default security headers" > "$temp_file"
             echo "include /etc/nginx/vhost.d/default;" >> "$temp_file"
             echo "" >> "$temp_file"
@@ -1364,10 +1377,12 @@ apply_opcache_config() {
 
     # Find PHP version
     if command -v php &>/dev/null; then
-        local php_version=$(php -v | head -1 | sed -n 's/^PHP \([0-9]\.[0-9]\).*/\1/p')
+        local php_version
+        php_version=$(php -v | head -1 | sed -n 's/^PHP \([0-9]\.[0-9]\).*/\1/p')
 
         if [ -n "$php_version" ]; then
-            local php_conf_dir="/etc/php/${php_version}/fpm/conf.d"
+            local php_conf_dir
+            php_conf_dir="/etc/php/${php_version}/fpm/conf.d"
 
             if [ -d "$php_conf_dir" ]; then
                 sudo cp "${TEMPLATE_DIR}/opcache.ini" "${php_conf_dir}/99-opcache-optimized.ini" 2>/dev/null || {

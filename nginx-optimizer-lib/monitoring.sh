@@ -216,6 +216,7 @@ echo "Nginx Status:"
 echo "─────────────"
 if command -v systemctl &>/dev/null && systemctl is-active --quiet nginx; then
     echo "✓ Running"
+    NGINX_VERSION
     NGINX_VERSION=$(nginx -v 2>&1 | sed -n 's/.*nginx\/\([0-9.]*\).*/\1/p')
     echo "  Version: $NGINX_VERSION"
 elif pgrep nginx &>/dev/null; then
@@ -254,6 +255,7 @@ echo "───────────────"
 if command -v php-fpm &>/dev/null || pgrep php-fpm &>/dev/null; then
     echo "✓ Running"
     if command -v php &>/dev/null; then
+        PHP_VERSION
         PHP_VERSION=$(php -v | head -1 | sed -n 's/^PHP \([0-9.]*\).*/\1/p')
         echo "  Version: $PHP_VERSION"
     fi
@@ -317,6 +319,7 @@ fi
 
 # Check error log for recent issues
 if [ -f /var/log/nginx/error.log ]; then
+    ERROR_COUNT
     ERROR_COUNT=$(grep "error" /var/log/nginx/error.log | tail -100 | wc -l)
     if [ "$ERROR_COUNT" -gt "$ERROR_THRESHOLD" ]; then
         echo "ALERT: High error count: $ERROR_COUNT errors in last 100 lines"
@@ -326,6 +329,7 @@ fi
 # Check cache size
 CACHE_DIR="/var/run/nginx-cache"
 if [ -d "$CACHE_DIR" ]; then
+    CACHE_SIZE
     CACHE_SIZE=$(du -sm "$CACHE_DIR" | cut -f1)
     if [ "$CACHE_SIZE" -gt "$CACHE_SIZE_THRESHOLD" ]; then
         echo "WARNING: Cache size exceeds threshold: ${CACHE_SIZE}MB"
@@ -333,6 +337,7 @@ if [ -d "$CACHE_DIR" ]; then
 fi
 
 # Check disk space
+DISK_USAGE
 DISK_USAGE=$(df -h / | tail -1 | awk '{print $5}' | tr -d '%')
 if [ "$DISK_USAGE" -gt 90 ]; then
     echo "ALERT: Disk usage critical: ${DISK_USAGE}%"
@@ -344,3 +349,4 @@ EOF
     log_success "Alert script created: $alert_script"
     log_info "Add to cron: */5 * * * * $alert_script"
 }
+

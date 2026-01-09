@@ -27,7 +27,8 @@ test_nginx_config() {
 
     # Test Docker nginx containers
     if command -v docker &>/dev/null; then
-        local containers=$(docker ps --filter "ancestor=nginx" --format "{{.Names}}" 2>/dev/null)
+        local containers
+        containers=$(docker ps --filter "ancestor=nginx" --format "{{.Names}}" 2>/dev/null)
 
         if [ -n "$containers" ]; then
             while IFS= read -r container; do
@@ -69,7 +70,8 @@ test_http_response() {
 
     log_info "Testing HTTP response: $url"
 
-    local response=$(curl -s -o /dev/null -w "%{http_code}" "$url" 2>/dev/null)
+    local response
+    response=$(curl -s -o /dev/null -w "%{http_code}" "$url" 2>/dev/null)
 
     if [ "$response" = "$expected_status" ]; then
         log_success "HTTP $response OK"
@@ -86,7 +88,8 @@ test_header_present() {
 
     log_info "Checking for header: $header_name"
 
-    local header=$(curl -sI "$url" 2>/dev/null | grep -i "^${header_name}:")
+    local header
+    header=$(curl -sI "$url" 2>/dev/null | grep -i "^${header_name}:")
 
     if [ -n "$header" ]; then
         log_success "Header found: $header"
@@ -103,7 +106,8 @@ test_http3_support() {
     log_info "Testing HTTP/3 support..."
 
     # Check for Alt-Svc header
-    local alt_svc=$(curl -sI "https://$domain" 2>/dev/null | grep -i "alt-svc:")
+    local alt_svc
+    alt_svc=$(curl -sI "https://$domain" 2>/dev/null | grep -i "alt-svc:")
 
     if echo "$alt_svc" | grep -q "h3"; then
         log_success "HTTP/3 advertised: $alt_svc"
@@ -121,13 +125,15 @@ test_cache_functionality() {
 
     # First request (MISS)
     log_info "Request 1: Should be cache MISS"
-    local cache1=$(curl -sI "$url" 2>/dev/null | grep -i "x-fastcgi-cache:")
+    local cache1
+    cache1=$(curl -sI "$url" 2>/dev/null | grep -i "x-fastcgi-cache:")
     echo "  $cache1"
 
     # Second request (should be HIT)
     sleep 1
     log_info "Request 2: Should be cache HIT"
-    local cache2=$(curl -sI "$url" 2>/dev/null | grep -i "x-fastcgi-cache:")
+    local cache2
+    cache2=$(curl -sI "$url" 2>/dev/null | grep -i "x-fastcgi-cache:")
     echo "  $cache2"
 
     if echo "$cache2" | grep -q "HIT"; then
@@ -145,13 +151,15 @@ test_compression() {
     log_info "Testing compression..."
 
     # Check for Brotli
-    local brotli=$(curl -sI -H "Accept-Encoding: br" "$url" 2>/dev/null | grep -i "content-encoding:")
+    local brotli
+    brotli=$(curl -sI -H "Accept-Encoding: br" "$url" 2>/dev/null | grep -i "content-encoding:")
 
     if echo "$brotli" | grep -q "br"; then
         log_success "Brotli compression enabled"
     else
         # Check for gzip
-        local gzip=$(curl -sI -H "Accept-Encoding: gzip" "$url" 2>/dev/null | grep -i "content-encoding:")
+        local gzip
+        gzip=$(curl -sI -H "Accept-Encoding: gzip" "$url" 2>/dev/null | grep -i "content-encoding:")
 
         if echo "$gzip" | grep -q "gzip"; then
             log_success "Gzip compression enabled"
@@ -207,7 +215,8 @@ test_wordpress_exclusions() {
 
     # Test xmlrpc.php (should be denied)
     log_info "Testing xmlrpc.php block..."
-    local xmlrpc_status=$(curl -s -o /dev/null -w "%{http_code}" "https://$domain/xmlrpc.php" 2>/dev/null)
+    local xmlrpc_status
+    xmlrpc_status=$(curl -s -o /dev/null -w "%{http_code}" "https://$domain/xmlrpc.php" 2>/dev/null)
 
     if [ "$xmlrpc_status" = "403" ] || [ "$xmlrpc_status" = "404" ]; then
         log_success "xmlrpc.php blocked (HTTP $xmlrpc_status)"
@@ -217,7 +226,8 @@ test_wordpress_exclusions() {
 
     # Test wp-config.php access (should be denied)
     log_info "Testing wp-config.php protection..."
-    local wpconfig_status=$(curl -s -o /dev/null -w "%{http_code}" "https://$domain/wp-config.php" 2>/dev/null)
+    local wpconfig_status
+    wpconfig_status=$(curl -s -o /dev/null -w "%{http_code}" "https://$domain/wp-config.php" 2>/dev/null)
 
     if [ "$wpconfig_status" = "403" ] || [ "$wpconfig_status" = "404" ]; then
         log_success "wp-config.php protected (HTTP $wpconfig_status)"
@@ -237,12 +247,13 @@ test_rate_limiting() {
     log_info "Testing rate limiting ($requests requests)..."
 
     local blocked=0
+    local status
 
     for i in $(seq 1 $requests); do
-        local status=$(curl -s -o /dev/null -w "%{http_code}" "$url" 2>/dev/null)
+        status=$(curl -s -o /dev/null -w "%{http_code}" "$url" 2>/dev/null)
 
         if [ "$status" = "429" ] || [ "$status" = "503" ]; then
-            ((blocked++))
+            blocked=$((blocked + 1))
         fi
     done
 
@@ -273,7 +284,8 @@ test_ssl_configuration() {
     log_success "SSL connection successful"
 
     # Check certificate
-    local cert_info=$(openssl s_client -connect "$domain:443" -servername "$domain" </dev/null 2>/dev/null | openssl x509 -noout -dates 2>/dev/null)
+    local cert_info
+    cert_info=$(openssl s_client -connect "$domain:443" -servername "$domain" </dev/null 2>/dev/null | openssl x509 -noout -dates 2>/dev/null)
 
     if [ -n "$cert_info" ]; then
         log_info "Certificate info:"
@@ -369,7 +381,8 @@ reload_nginx() {
         fi
 
         # Reload other nginx containers
-        local containers=$(docker ps --filter "ancestor=nginx" --format "{{.Names}}" 2>/dev/null)
+        local containers
+        containers=$(docker ps --filter "ancestor=nginx" --format "{{.Names}}" 2>/dev/null)
 
         if [ -n "$containers" ]; then
             while IFS= read -r container; do
@@ -391,7 +404,8 @@ restart_php_fpm() {
 
     # Find PHP version
     if command -v systemctl &>/dev/null; then
-        local php_services=$(systemctl list-units --type=service | grep php.*fpm | awk '{print $1}')
+        local php_services
+        php_services=$(systemctl list-units --type=service | grep php.*fpm | awk '{print $1}')
 
         if [ -n "$php_services" ]; then
             while IFS= read -r service; do

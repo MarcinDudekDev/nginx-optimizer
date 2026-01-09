@@ -51,13 +51,15 @@ init_honeypot() {
 generate_canary_token() {
     # Generate a unique token for tracking
     local prefix="${1:-CANARY}"
-    local token=$(openssl rand -hex 16)
+    local token
+    token=$(openssl rand -hex 16)
     echo "${prefix}_${token}"
 }
 
 generate_fake_aws_key() {
     # Generate fake AWS access key (AKIA format)
-    local random_part=$(openssl rand -hex 8 | tr '[:lower:]' '[:upper:]')
+    local random_part
+    random_part=$(openssl rand -hex 8 | tr '[:lower:]' '[:upper:]')
     echo "AKIA${random_part}FAKE"
 }
 
@@ -92,7 +94,8 @@ generate_site_canary_tokens() {
     fi
 
     # File-based cache (bash 3.2 compatible)
-    local cache_file="${HONEYPOT_CONFIG_DIR}/.token-cache-$(echo "$site_domain" | tr '.' '_')"
+    local cache_file
+    cache_file="${HONEYPOT_CONFIG_DIR}/.token-cache-$(echo "$site_domain" | tr '.' '_')"
 
     # Return cached tokens if already generated this session
     if [[ -f "$cache_file" && "$force_regenerate" != "true" ]]; then
@@ -100,17 +103,24 @@ generate_site_canary_tokens() {
         return 0
     fi
 
-    local site_id=$(get_md5_hash "$site_domain")
+    local site_id
+    site_id=$(get_md5_hash "$site_domain")
 
     # Check if tokens already exist on disk
     if [[ -f "$CANARY_TOKENS_FILE" ]] && command -v jq &>/dev/null; then
-        local existing_tokens=$(jq -r ".sites[\"$site_domain\"].tokens // empty" "$CANARY_TOKENS_FILE" 2>/dev/null)
+        local existing_tokens
+        existing_tokens=$(jq -r ".sites[\"$site_domain\"].tokens // empty" "$CANARY_TOKENS_FILE" 2>/dev/null)
         if [[ -n "$existing_tokens" && "$force_regenerate" != "true" ]]; then
-            local aws_key=$(echo "$existing_tokens" | jq -r '.aws_access_key')
-            local aws_secret=$(echo "$existing_tokens" | jq -r '.aws_secret_key')
-            local db_pass=$(echo "$existing_tokens" | jq -r '.db_password')
-            local api_key=$(echo "$existing_tokens" | jq -r '.api_key')
-            local canary=$(echo "$existing_tokens" | jq -r '.canary_callback')
+            local aws_key
+            aws_key=$(echo "$existing_tokens" | jq -r '.aws_access_key')
+            local aws_secret
+            aws_secret=$(echo "$existing_tokens" | jq -r '.aws_secret_key')
+            local db_pass
+            db_pass=$(echo "$existing_tokens" | jq -r '.db_password')
+            local api_key
+            api_key=$(echo "$existing_tokens" | jq -r '.api_key')
+            local canary
+            canary=$(echo "$existing_tokens" | jq -r '.canary_callback')
 
             local result="AWS_KEY=$aws_key
 AWS_SECRET=$aws_secret
@@ -126,14 +136,20 @@ CANARY_CALLBACK=$canary"
     log_info "Generating canary tokens for $site_domain..."
 
     # Generate unique tokens
-    local aws_key=$(generate_fake_aws_key)
-    local aws_secret=$(generate_fake_aws_secret)
-    local db_pass=$(openssl rand -base64 16 | tr -d '\n')
-    local api_key=$(openssl rand -hex 32)
-    local canary_callback="/.h0n3yp0t/${site_id}_$(openssl rand -hex 4)"
+    local aws_key
+    aws_key=$(generate_fake_aws_key)
+    local aws_secret
+    aws_secret=$(generate_fake_aws_secret)
+    local db_pass
+    db_pass=$(openssl rand -base64 16 | tr -d '\n')
+    local api_key
+    api_key=$(openssl rand -hex 32)
+    local canary_callback
+    canary_callback="/.h0n3yp0t/${site_id}_$(openssl rand -hex 4)"
 
     # Store tokens in JSON
-    local token_data=$(cat <<EOF
+    local token_data
+    token_data=$(cat <<EOF
 {
     "site": "$site_domain",
     "site_id": "$site_id",
@@ -151,7 +167,8 @@ EOF
 
     # Update canary tokens file
     if command -v jq &>/dev/null; then
-        local existing=$(cat "$CANARY_TOKENS_FILE")
+        local existing
+        existing=$(cat "$CANARY_TOKENS_FILE")
         echo "$existing" | jq --arg site "$site_domain" --argjson data "$token_data" \
             '.sites[$site] = $data' > "${CANARY_TOKENS_FILE}.tmp"
         mv "${CANARY_TOKENS_FILE}.tmp" "$CANARY_TOKENS_FILE"
@@ -179,12 +196,18 @@ create_fake_env_file() {
     local output_file="${HONEYPOT_DIR}/fake-env.txt"
 
     # Get or generate tokens
-    local tokens=$(generate_site_canary_tokens "$site_domain")
-    local aws_key=$(echo "$tokens" | grep AWS_KEY | cut -d= -f2)
-    local aws_secret=$(echo "$tokens" | grep AWS_SECRET | cut -d= -f2)
-    local db_pass=$(echo "$tokens" | grep DB_PASS | cut -d= -f2)
-    local api_key=$(echo "$tokens" | grep API_KEY | cut -d= -f2)
-    local canary=$(echo "$tokens" | grep CANARY_CALLBACK | cut -d= -f2)
+    local tokens
+    tokens=$(generate_site_canary_tokens "$site_domain")
+    local aws_key
+    aws_key=$(echo "$tokens" | grep AWS_KEY | cut -d= -f2)
+    local aws_secret
+    aws_secret=$(echo "$tokens" | grep AWS_SECRET | cut -d= -f2)
+    local db_pass
+    db_pass=$(echo "$tokens" | grep DB_PASS | cut -d= -f2)
+    local api_key
+    api_key=$(echo "$tokens" | grep API_KEY | cut -d= -f2)
+    local canary
+    canary=$(echo "$tokens" | grep CANARY_CALLBACK | cut -d= -f2)
 
     log_info "Creating fake .env file..."
 
@@ -244,9 +267,12 @@ create_fake_git_config() {
     local site_domain="$1"
     local output_file="${HONEYPOT_DIR}/fake-git-config.txt"
 
-    local tokens=$(generate_site_canary_tokens "$site_domain")
-    local api_key=$(echo "$tokens" | grep API_KEY | cut -d= -f2)
-    local canary=$(echo "$tokens" | grep CANARY_CALLBACK | cut -d= -f2)
+    local tokens
+    tokens=$(generate_site_canary_tokens "$site_domain")
+    local api_key
+    api_key=$(echo "$tokens" | grep API_KEY | cut -d= -f2)
+    local canary
+    canary=$(echo "$tokens" | grep CANARY_CALLBACK | cut -d= -f2)
 
     log_info "Creating fake .git/config file..."
 
@@ -282,9 +308,12 @@ create_fake_database_dump() {
     local site_domain="$1"
     local output_file="${HONEYPOT_DIR}/fake-database.sql"
 
-    local tokens=$(generate_site_canary_tokens "$site_domain")
-    local db_pass=$(echo "$tokens" | grep DB_PASS | cut -d= -f2)
-    local canary=$(echo "$tokens" | grep CANARY_CALLBACK | cut -d= -f2)
+    local tokens
+    tokens=$(generate_site_canary_tokens "$site_domain")
+    local db_pass
+    db_pass=$(echo "$tokens" | grep DB_PASS | cut -d= -f2)
+    local canary
+    canary=$(echo "$tokens" | grep CANARY_CALLBACK | cut -d= -f2)
 
     log_info "Creating fake database dump..."
 
@@ -466,7 +495,8 @@ analyze_honeypot_logs() {
     echo ""
 
     # Total hits
-    local total=$(sudo wc -l < "$HONEYPOT_LOG" 2>/dev/null || echo 0)
+    local total
+    total=$(sudo wc -l < "$HONEYPOT_LOG" 2>/dev/null || echo 0)
     echo "Total honeypot hits: $total"
     echo ""
 
@@ -499,7 +529,8 @@ analyze_honeypot_logs() {
 
     # Canary token callbacks (critical!)
     if [[ -f "$HONEYPOT_CANARY_LOG" ]]; then
-        local canary_hits=$(sudo wc -l < "$HONEYPOT_CANARY_LOG" 2>/dev/null || echo 0)
+        local canary_hits
+        canary_hits=$(sudo wc -l < "$HONEYPOT_CANARY_LOG" 2>/dev/null || echo 0)
         if [[ "$canary_hits" -gt 0 ]]; then
             echo "!!! CANARY TOKEN CALLBACKS DETECTED !!!"
             echo "Someone used your fake credentials!"
@@ -568,10 +599,12 @@ last_pos=0
 [[ -f "\$LAST_POS_FILE" ]] && last_pos=\$(cat "\$LAST_POS_FILE")
 
 # Get current size
+current_size
 current_size=\$(stat -f%z "\$CANARY_LOG" 2>/dev/null || stat -c%s "\$CANARY_LOG" 2>/dev/null || echo 0)
 
 if [[ "\$current_size" -gt "\$last_pos" ]]; then
     # New entries! Send alert
+    new_entries
     new_entries=\$(tail -c +\$((last_pos + 1)) "\$CANARY_LOG")
 
     curl -s -X POST "\$WEBHOOK_URL" \\
@@ -611,6 +644,8 @@ export_attacker_ips() {
     sudo sed -n 's/.*ip=\([0-9.]*\).*/\1/p' "$HONEYPOT_LOG" 2>/dev/null | \
         sort -u > "$output_file"
 
-    local count=$(wc -l < "$output_file" | tr -d ' ')
+    local count
+    count=$(wc -l < "$output_file" | tr -d ' ')
     log_success "Exported $count unique IPs to $output_file"
 }
+

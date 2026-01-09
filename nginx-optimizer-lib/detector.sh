@@ -73,7 +73,8 @@ detect_system_nginx() {
             add_instance "system" "nginx" "$conf"
 
             if command -v nginx &>/dev/null; then
-                local version=$(nginx -v 2>&1 | sed -n 's/.*nginx\/\([0-9.]*\).*/\1/p')
+                local version
+                version=$(nginx -v 2>&1 | sed -n 's/.*nginx\/\([0-9.]*\).*/\1/p')
                 log_info "  Version: $version"
             fi
             return 0
@@ -99,7 +100,8 @@ detect_docker_nginx() {
     fi
 
     # Check for nginx containers
-    local containers=$(docker ps --filter "ancestor=nginx" --format "{{.Names}}" 2>/dev/null)
+    local containers
+    containers=$(docker ps --filter "ancestor=nginx" --format "{{.Names}}" 2>/dev/null)
 
     # Also check for wp-test-proxy specifically
     if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "wp-test-proxy"; then
@@ -131,7 +133,8 @@ detect_wp_test_sites() {
     local site_count=0
     for site_dir in "$WP_TEST_SITES"/*; do
         if [ -d "$site_dir" ] && [ "$(basename "$site_dir")" != ".DS_Store" ]; then
-            local domain=$(basename "$site_dir")
+            local domain
+            domain=$(basename "$site_dir")
             log_success "Found wp-test site: $domain"
             add_instance "wp_test" "$domain" "$site_dir"
             ((site_count++))
@@ -183,7 +186,8 @@ detect_nginx_instances() {
     fi
 
     echo ""
-    local count=$(get_instance_count)
+    local count
+    count=$(get_instance_count)
     if [ "$count" -eq 0 ]; then
         log_warn "No nginx installations detected"
         return 1
@@ -202,9 +206,12 @@ list_nginx_instances() {
     echo "═══════════════════════════════════════════════════════════"
 
     for entry in "${DETECTED_INSTANCES[@]}"; do
-        local type=$(echo "$entry" | cut -d: -f1)
-        local name=$(echo "$entry" | cut -d: -f2)
-        local path=$(echo "$entry" | cut -d: -f3-)
+        local type
+        local name
+        local path
+        type=$(echo "$entry" | cut -d: -f1)
+        name=$(echo "$entry" | cut -d: -f2)
+        path=$(echo "$entry" | cut -d: -f3-)
         echo "  • [$type] $name: $path"
     done
     echo ""
@@ -647,9 +654,12 @@ analyze_optimizations() {
     echo ""
 
     for entry in "${DETECTED_INSTANCES[@]}"; do
-        local type=$(echo "$entry" | cut -d: -f1)
-        local name=$(echo "$entry" | cut -d: -f2)
-        local path=$(echo "$entry" | cut -d: -f3-)
+        local type
+        local name
+        local path
+        type=$(echo "$entry" | cut -d: -f1)
+        name=$(echo "$entry" | cut -d: -f2)
+        path=$(echo "$entry" | cut -d: -f3-)
 
         case "$type" in
             wp_test)
@@ -752,3 +762,4 @@ show_status() {
     echo -e "  ${YELLOW}✗${NC} = Missing (can be optimized)"
     echo "═══════════════════════════════════════════════════════════"
 }
+

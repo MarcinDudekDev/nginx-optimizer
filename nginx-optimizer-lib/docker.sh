@@ -236,7 +236,8 @@ safe_add_docker_service() {
     log_info "Safely adding service '$service_name' to docker-compose.yml"
 
     # Backup original file
-    local backup_file="${compose_file}.backup-$(date +%Y%m%d-%H%M%S)"
+    local backup_file
+    backup_file="${compose_file}.backup-$(date +%Y%m%d-%H%M%S)"
     cp "$compose_file" "$backup_file"
     log_info "Backup created: $backup_file"
 
@@ -410,3 +411,4 @@ verify_path_accessible_in_container() {
         return 1
     fi
 }
+

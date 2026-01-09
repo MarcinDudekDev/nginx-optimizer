@@ -18,13 +18,15 @@ get_dir_mtime() {
     local mtime
 
     # Try BSD stat first (macOS)
-    if mtime=$(stat -f '%m' "$dir" 2>/dev/null); then
+    mtime=$(stat -f '%m' "$dir" 2>/dev/null)
+    if [ $? -eq 0 ]; then
         echo "$mtime"
         return 0
     fi
 
     # Try GNU stat (Linux)
-    if mtime=$(stat -c '%Y' "$dir" 2>/dev/null); then
+    mtime=$(stat -c '%Y' "$dir" 2>/dev/null)
+    if [ $? -eq 0 ]; then
         echo "$mtime"
         return 0
     fi
@@ -39,7 +41,8 @@ get_dir_mtime() {
 
 create_backup() {
     local target_site="$1"
-    local timestamp=$(date +%Y%m%d-%H%M%S)
+    local timestamp
+    timestamp=$(date +%Y%m%d-%H%M%S)
 
     if [ -n "$CUSTOM_BACKUP_DIR" ]; then
         CURRENT_BACKUP_DIR="$CUSTOM_BACKUP_DIR"
@@ -97,7 +100,8 @@ create_backup() {
         local compose_count=0
         for site_dir in "$WP_TEST_SITES"/*; do
             if [ -d "$site_dir" ] && [ -f "$site_dir/docker-compose.yml" ]; then
-                local site_name=$(basename "$site_dir")
+                local site_name
+                site_name=$(basename "$site_dir")
                 cp "$site_dir/docker-compose.yml" "${CURRENT_BACKUP_DIR}/docker-compose-files/${site_name}.yml"
                 compose_count=$((compose_count + 1))
             fi
@@ -451,3 +455,4 @@ list_backups() {
     echo "Restore with: nginx-optimizer rollback <backup-name>"
     echo "═══════════════════════════════════════════════════════════"
 }
+

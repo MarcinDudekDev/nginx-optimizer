@@ -20,7 +20,8 @@ run_benchmark() {
 
     mkdir -p "$BENCHMARK_RESULTS_DIR"
 
-    local timestamp=$(date +%Y%m%d-%H%M%S)
+    local timestamp
+    timestamp=$(date +%Y%m%d-%H%M%S)
     local results_file="${BENCHMARK_RESULTS_DIR}/${target_site}-${timestamp}.txt"
     local url="https://$target_site"
 
@@ -81,12 +82,14 @@ benchmark_response_time() {
     local count=10
 
     for i in $(seq 1 $count); do
-        local time=$(curl -o /dev/null -s -w "%{time_total}" "$url")
+        local time
+        time=$(curl -o /dev/null -s -w "%{time_total}" "$url")
         total=$(echo "$total + $time" | bc)
         echo "  Request $i: ${time}s"
     done
 
-    local avg=$(echo "scale=3; $total / $count" | bc)
+    local avg
+    avg=$(echo "scale=3; $total / $count" | bc)
     echo ""
     echo "  Average: ${avg}s"
     echo ""
@@ -99,7 +102,8 @@ benchmark_page_load() {
     echo "2. Page Load Time Breakdown"
     echo "───────────────────────────────────"
 
-    local metrics=$(curl -o /dev/null -s -w "DNS: %{time_namelookup}s\nConnect: %{time_connect}s\nSSL: %{time_appconnect}s\nTTFB: %{time_starttransfer}s\nTotal: %{time_total}s\n" "$url")
+    local metrics
+    metrics=$(curl -o /dev/null -s -w "DNS: %{time_namelookup}s\nConnect: %{time_connect}s\nSSL: %{time_appconnect}s\nTTFB: %{time_starttransfer}s\nTotal: %{time_total}s\n" "$url")
 
     echo "$metrics" | sed 's/^/  /'
     echo ""
@@ -138,22 +142,27 @@ benchmark_cache_performance() {
 
     # Cold cache
     log_info "Cold cache (first request)..."
-    local cold_time=$(curl -o /dev/null -s -w "%{time_total}" "$url")
-    local cold_cache=$(curl -sI "$url" | grep -i "x-fastcgi-cache:" | awk '{print $2}')
+    local cold_time
+    cold_time=$(curl -o /dev/null -s -w "%{time_total}" "$url")
+    local cold_cache
+    cold_cache=$(curl -sI "$url" | grep -i "x-fastcgi-cache:" | awk '{print $2}')
     echo "  Time: ${cold_time}s"
     echo "  Status: ${cold_cache:-N/A}"
 
     # Warm cache
     sleep 1
     log_info "Warm cache (second request)..."
-    local warm_time=$(curl -o /dev/null -s -w "%{time_total}" "$url")
-    local warm_cache=$(curl -sI "$url" | grep -i "x-fastcgi-cache:" | awk '{print $2}')
+    local warm_time
+    warm_time=$(curl -o /dev/null -s -w "%{time_total}" "$url")
+    local warm_cache
+    warm_cache=$(curl -sI "$url" | grep -i "x-fastcgi-cache:" | awk '{print $2}')
     echo "  Time: ${warm_time}s"
     echo "  Status: ${warm_cache:-N/A}"
 
     # Calculate improvement
     if command -v bc &>/dev/null; then
-        local improvement=$(echo "scale=2; (($cold_time - $warm_time) / $cold_time) * 100" | bc)
+        local improvement
+        improvement=$(echo "scale=2; (($cold_time - $warm_time) / $cold_time) * 100" | bc)
         echo ""
         echo "  Cache improvement: ${improvement}%"
     fi
@@ -170,27 +179,34 @@ benchmark_compression() {
 
     # Test without compression
     log_info "Without compression..."
-    local size_uncompressed=$(curl -s -H "Accept-Encoding: identity" "$url" | wc -c)
+    local size_uncompressed
+    size_uncompressed=$(curl -s -H "Accept-Encoding: identity" "$url" | wc -c)
     echo "  Size: $size_uncompressed bytes"
 
     # Test with gzip
     log_info "With gzip..."
-    local size_gzip=$(curl -s -H "Accept-Encoding: gzip" "$url" | wc -c)
-    local encoding_gzip=$(curl -sI -H "Accept-Encoding: gzip" "$url" | grep -i "content-encoding:" | awk '{print $2}')
+    local size_gzip
+    size_gzip=$(curl -s -H "Accept-Encoding: gzip" "$url" | wc -c)
+    local encoding_gzip
+    encoding_gzip=$(curl -sI -H "Accept-Encoding: gzip" "$url" | grep -i "content-encoding:" | awk '{print $2}')
     echo "  Size: $size_gzip bytes"
     echo "  Encoding: ${encoding_gzip:-none}"
 
     # Test with brotli
     log_info "With brotli..."
-    local size_brotli=$(curl -s -H "Accept-Encoding: br" "$url" | wc -c)
-    local encoding_brotli=$(curl -sI -H "Accept-Encoding: br" "$url" | grep -i "content-encoding:" | awk '{print $2}')
+    local size_brotli
+    size_brotli=$(curl -s -H "Accept-Encoding: br" "$url" | wc -c)
+    local encoding_brotli
+    encoding_brotli=$(curl -sI -H "Accept-Encoding: br" "$url" | grep -i "content-encoding:" | awk '{print $2}')
     echo "  Size: $size_brotli bytes"
     echo "  Encoding: ${encoding_brotli:-none}"
 
     # Calculate compression ratios
     if command -v bc &>/dev/null && [ "$size_uncompressed" -gt 0 ]; then
-        local ratio_gzip=$(echo "scale=2; (($size_uncompressed - $size_gzip) / $size_uncompressed) * 100" | bc)
-        local ratio_brotli=$(echo "scale=2; (($size_uncompressed - $size_brotli) / $size_uncompressed) * 100" | bc)
+        local ratio_gzip
+        ratio_gzip=$(echo "scale=2; (($size_uncompressed - $size_gzip) / $size_uncompressed) * 100" | bc)
+        local ratio_brotli
+        ratio_brotli=$(echo "scale=2; (($size_uncompressed - $size_brotli) / $size_uncompressed) * 100" | bc)
 
         echo ""
         echo "  Gzip compression: ${ratio_gzip}%"
@@ -211,12 +227,14 @@ benchmark_ttfb() {
     local total=0
 
     for i in $(seq 1 $count); do
-        local ttfb=$(curl -o /dev/null -s -w "%{time_starttransfer}" "$url")
+        local ttfb
+        ttfb=$(curl -o /dev/null -s -w "%{time_starttransfer}" "$url")
         total=$(echo "$total + $ttfb" | bc)
         echo "  Test $i: ${ttfb}s"
     done
 
-    local avg=$(echo "scale=3; $total / $count" | bc)
+    local avg
+    avg=$(echo "scale=3; $total / $count" | bc)
     echo ""
     echo "  Average TTFB: ${avg}s"
 
@@ -244,9 +262,12 @@ show_benchmark_summary() {
     echo ""
 
     # Extract key metrics
-    local avg_response=$(grep "Average:" "$results_file" | head -1 | awk '{print $2}')
-    local avg_ttfb=$(grep "Average TTFB:" "$results_file" | awk '{print $3}')
-    local cache_status=$(grep "Warm cache" -A2 "$results_file" | grep "Status:" | awk '{print $2}')
+    local avg_response
+    avg_response=$(grep "Average:" "$results_file" | head -1 | awk '{print $2}')
+    local avg_ttfb
+    avg_ttfb=$(grep "Average TTFB:" "$results_file" | awk '{print $3}')
+    local cache_status
+    cache_status=$(grep "Warm cache" -A2 "$results_file" | grep "Status:" | awk '{print $2}')
 
     echo "  Average Response Time: ${avg_response:-N/A}"
     echo "  Average TTFB: ${avg_ttfb:-N/A}"
@@ -263,7 +284,8 @@ compare_benchmarks() {
     echo "Benchmark Comparison: $site"
     echo "═══════════════════════════════════════════════════════════"
 
-    local benchmarks=($(ls -t "${BENCHMARK_RESULTS_DIR}/${site}-"*.txt 2>/dev/null | head -2))
+    local benchmarks
+    benchmarks=($(ls -t "${BENCHMARK_RESULTS_DIR}/${site}-"*.txt 2>/dev/null | head -2))
 
     if [ ${#benchmarks[@]} -lt 2 ]; then
         log_info "Need at least 2 benchmarks to compare"
@@ -283,12 +305,16 @@ compare_benchmarks() {
     echo "Metric Comparison:"
     echo "──────────────────"
 
-    local latest_resp=$(grep "Average:" "$latest" | head -1 | awk '{print $2}' | tr -d 's')
-    local prev_resp=$(grep "Average:" "$previous" | head -1 | awk '{print $2}' | tr -d 's')
+    local latest_resp
+    latest_resp=$(grep "Average:" "$latest" | head -1 | awk '{print $2}' | tr -d 's')
+    local prev_resp
+    prev_resp=$(grep "Average:" "$previous" | head -1 | awk '{print $2}' | tr -d 's')
 
     if [ -n "$latest_resp" ] && [ -n "$prev_resp" ]; then
-        local diff=$(echo "scale=3; $latest_resp - $prev_resp" | bc)
-        local pct=$(echo "scale=2; ($diff / $prev_resp) * 100" | bc)
+        local diff
+        diff=$(echo "scale=3; $latest_resp - $prev_resp" | bc)
+        local pct
+        pct=$(echo "scale=2; ($diff / $prev_resp) * 100" | bc)
 
         echo "  Response Time:"
         echo "    Latest: ${latest_resp}s"
@@ -318,9 +344,12 @@ list_benchmarks() {
     fi
 
     for result in $(ls -t "$BENCHMARK_RESULTS_DIR"/*.txt 2>/dev/null); do
-        local filename=$(basename "$result")
-        local size=$(du -h "$result" | cut -f1)
-        local date=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M:%S" "$result" 2>/dev/null || stat -c "%y" "$result" 2>/dev/null | cut -d'.' -f1)
+        local filename
+        filename=$(basename "$result")
+        local size
+        size=$(du -h "$result" | cut -f1)
+        local date
+        date=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M:%S" "$result" 2>/dev/null || stat -c "%y" "$result" 2>/dev/null | cut -d'.' -f1)
 
         echo "  $filename"
         echo "    Date: $date"
@@ -330,3 +359,4 @@ list_benchmarks() {
 
     echo "═══════════════════════════════════════════════════════════"
 }
+

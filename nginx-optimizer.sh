@@ -16,7 +16,7 @@
 set -euo pipefail
 
 # Script version
-VERSION="1.2.0"
+VERSION="0.9.0-beta"
 
 # Directories
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -91,7 +91,8 @@ log() {
     local level=$1
     shift
     local message="$*"
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local timestamp
+    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
 
     echo "[${timestamp}] [${level}] ${message}" | tee -a "${LOG_FILE}"
 }

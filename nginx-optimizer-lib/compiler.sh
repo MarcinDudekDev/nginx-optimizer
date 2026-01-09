@@ -209,7 +209,9 @@ install_nginx() {
     if command -v nginx &>/dev/null; then
         log_info "Backing up existing nginx..."
         mkdir -p "$NGINX_BACKUP_DIR"
-        cp "$(which nginx)" "${NGINX_BACKUP_DIR}/nginx.backup.$(date +%Y%m%d)"
+        local nginx_path
+        nginx_path=$(which nginx)
+        cp "$nginx_path" "${NGINX_BACKUP_DIR}/nginx.backup.$(date +%Y%m%d)"
     fi
 
     # Install new nginx
@@ -228,7 +230,8 @@ install_nginx() {
 rollback_nginx() {
     log_warn "Rolling back to previous nginx..."
 
-    local latest_backup=$(ls -t "${NGINX_BACKUP_DIR}"/nginx.backup.* 2>/dev/null | head -1)
+    local latest_backup
+    latest_backup=$(ls -t "${NGINX_BACKUP_DIR}"/nginx.backup.* 2>/dev/null | head -1)
 
     if [ -n "$latest_backup" ]; then
         sudo cp "$latest_backup" /usr/sbin/nginx
@@ -237,3 +240,4 @@ rollback_nginx() {
         log_error "No backup found!"
     fi
 }
+
