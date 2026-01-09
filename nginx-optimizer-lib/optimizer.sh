@@ -1425,10 +1425,6 @@ optimize_www_ssl() {
 
     log_info "Optimizing: WWW in SSL blocks..."
 
-    if [ "$DRY_RUN" = true ]; then
-        log_info "[DRY RUN] Would add www variants to SSL server_name directives"
-    fi
-
     # Process each site config
     for site_conf in /etc/nginx/sites-enabled/*; do
         [ -f "$site_conf" ] || continue
@@ -1446,22 +1442,33 @@ optimize_www_ssl() {
             continue
         fi
 
-        # Extract base domain from SSL server_name (non-www version)
+        # Extract base domain from SSL server block (tracking brace depth)
         local base_domain
         base_domain=$(awk '
-            /^[[:space:]]*server[[:space:]]*\{/ { in_server=1; next }
-            in_server && /listen.*443.*ssl/ { is_ssl=1 }
-            in_server && is_ssl && /server_name[[:space:]]+([^w]|w[^w])/ {
-                # Get first non-www domain
-                for (i=2; i<=NF; i++) {
-                    gsub(/;/, "", $i)
-                    if ($i !~ /^www\./ && $i !~ /^$/) {
-                        print $i
-                        exit
+            /^[[:space:]]*server[[:space:]]*\{/ && !in_server { in_server=1; depth=1; block=""; next }
+            in_server && /\{/ { depth++ }
+            in_server && /\}/ { depth-- }
+            in_server { block = block $0 "\n" }
+            in_server && depth == 0 {
+                if (block ~ /listen.*443.*ssl/) {
+                    # Extract first non-www domain from server_name
+                    n = split(block, lines, "\n")
+                    for (i=1; i<=n; i++) {
+                        if (lines[i] ~ /server_name/) {
+                            gsub(/server_name[[:space:]]+/, "", lines[i])
+                            gsub(/;.*/, "", lines[i])
+                            split(lines[i], domains, " ")
+                            for (j=1; j<=length(domains); j++) {
+                                if (domains[j] !~ /^www\./ && domains[j] != "") {
+                                    print domains[j]
+                                    exit
+                                }
+                            }
+                        }
                     }
                 }
+                in_server=0
             }
-            in_server && /^\}/ { in_server=0; is_ssl=0 }
         ' "$site_conf")
 
         [ -z "$base_domain" ] && continue
@@ -1471,25 +1478,33 @@ optimize_www_ssl() {
             continue
         fi
 
-        # Check if SSL block already has www
-        if awk -v domain="$base_domain" '
-            /^[[:space:]]*server[[:space:]]*\{/ { in_server=1; has_ssl=0; next }
-            in_server && /listen.*443.*ssl/ { has_ssl=1 }
-            in_server && has_ssl && /server_name.*www\./ && $0 ~ domain { found=1 }
-            in_server && /^\}/ { in_server=0; has_ssl=0 }
-            END { exit !found }
-        ' "$site_conf" 2>/dev/null; then
+        # Check if SSL block already has www (using same brace-depth logic)
+        local ssl_block
+        ssl_block=$(awk '
+            /^[[:space:]]*server[[:space:]]*\{/ && !in_server { in_server=1; depth=1; block=""; next }
+            in_server && /\{/ { depth++ }
+            in_server && /\}/ { depth-- }
+            in_server { block = block $0 "\n" }
+            in_server && depth == 0 {
+                if (block ~ /listen.*443.*ssl/) print block
+                in_server=0
+            }
+        ' "$site_conf" 2>/dev/null)
+
+        if echo "$ssl_block" | grep -q "server_name.*www\\.${base_domain}"; then
             log_info "Already has www in SSL: $config_name"
             continue
         fi
 
-        log_info "Adding www.$base_domain to SSL block in: $config_name"
-
         if [ "$DRY_RUN" = true ]; then
-            log_info "[DRY RUN] Would modify: $site_conf"
-            log_info "[DRY RUN]   server_name $base_domain; -> server_name $base_domain www.$base_domain;"
+            log_info "[DRY RUN] $config_name:"
+            log_info "  Change: server_name $base_domain;"
+            log_info "      To: server_name $base_domain www.$base_domain;"
+            APPLIED_OPTIMIZATIONS+=("WWW in SSL: $base_domain (dry-run)")
             continue
         fi
+
+        log_info "Adding www.$base_domain to SSL block in: $config_name"
 
         # Backup before modifying
         local backup_file="${site_conf}.wwwbak"
