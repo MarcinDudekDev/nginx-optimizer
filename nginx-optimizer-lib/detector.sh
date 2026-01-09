@@ -1226,6 +1226,7 @@ analyze_single_site() {
         site_score_enabled=$((site_score_enabled + 1))
     else
         printf "    ${YELLOW}✗${NC} %-22s\n" "HTTP/3 QUIC"
+        record_missing_feature "http3" "$site_name"
     fi
     site_score_total=$((site_score_total + 1))
 
@@ -1240,6 +1241,7 @@ analyze_single_site() {
         site_score_enabled=$((site_score_enabled + 1))
     else
         printf "    ${YELLOW}✗${NC} %-22s\n" "FastCGI Cache"
+        record_missing_feature "fastcgi-cache" "$site_name"
     fi
     site_score_total=$((site_score_total + 1))
 
@@ -1254,6 +1256,7 @@ analyze_single_site() {
         site_score_enabled=$((site_score_enabled + 1))
     else
         printf "    ${YELLOW}✗${NC} %-22s\n" "Brotli Compression"
+        record_missing_feature "brotli" "$site_name"
     fi
     site_score_total=$((site_score_total + 1))
 
@@ -1268,6 +1271,7 @@ analyze_single_site() {
         site_score_enabled=$((site_score_enabled + 1))
     else
         printf "    ${YELLOW}✗${NC} %-22s\n" "Gzip Compression"
+        record_missing_feature "gzip" "$site_name"
     fi
     site_score_total=$((site_score_total + 1))
 
@@ -1282,6 +1286,7 @@ analyze_single_site() {
         site_score_enabled=$((site_score_enabled + 1))
     else
         printf "    ${YELLOW}✗${NC} %-22s\n" "Security Headers"
+        record_missing_feature "security" "$site_name"
     fi
     site_score_total=$((site_score_total + 1))
 
@@ -1296,6 +1301,7 @@ analyze_single_site() {
         site_score_enabled=$((site_score_enabled + 1))
     else
         printf "    ${YELLOW}✗${NC} %-22s\n" "Rate Limiting"
+        record_missing_feature "rate-limiting" "$site_name"
     fi
     site_score_total=$((site_score_total + 1))
 
@@ -1310,6 +1316,7 @@ analyze_single_site() {
         site_score_enabled=$((site_score_enabled + 1))
     else
         printf "    ${YELLOW}✗${NC} %-22s\n" "WordPress Exclusions"
+        record_missing_feature "wordpress" "$site_name"
     fi
     site_score_total=$((site_score_total + 1))
 
@@ -1323,6 +1330,7 @@ analyze_single_site() {
         fi
     else
         printf "    ${YELLOW}✗${NC} %-22s\n" "OCSP Stapling"
+        record_missing_feature "ocsp" "$site_name"
     fi
 
     # TLS Versions - per-site (no score)
@@ -1676,6 +1684,9 @@ analyze_optimizations() {
 
     local total_sites=0
 
+    # Reset recommendation tracking
+    reset_recommendations
+
     # Iterate through each unique site
     while IFS='|' read -r site_name config_file ssl_status; do
         # Skip empty lines
@@ -1684,6 +1695,9 @@ analyze_optimizations() {
         analyze_single_site "$site_name" "$config_file"
         total_sites=$((total_sites + 1))
     done <<< "$sites"
+
+    # Update global count for recommendations
+    TOTAL_SITES_ANALYZED=$total_sites
 
     # Show summary
     echo ""
@@ -1694,11 +1708,133 @@ analyze_optimizations() {
     echo -e "  ${GREEN}✓${NC} = Enabled"
     echo -e "  ${YELLOW}✗${NC} = Missing (can be optimized)"
     echo "═══════════════════════════════════════════════════════════"
+
+    # Show recommendations and optionally apply
+    show_recommendations
 }
 
 # Global score counters
 SCORE_ENABLED=0
 SCORE_TOTAL=0
+
+# Recommendation tracking - stores "feature:site" entries
+# Format: "http3:site1.com\nhttp3:site2.com\nbrotli:ALL\n..."
+MISSING_FEATURES=""
+TOTAL_SITES_ANALYZED=0
+ALL_SITES_LIST=""
+
+# Feature metadata: feature_name|display_name|is_global|cli_feature
+FEATURE_META="http3|HTTP/3 QUIC|0|http3
+fastcgi-cache|FastCGI Cache|0|fastcgi-cache
+brotli|Brotli Compression|1|brotli
+gzip|Gzip Compression|1|compression
+security|Security Headers|0|security
+rate-limiting|Rate Limiting|0|security
+wordpress|WordPress Exclusions|0|wordpress
+ocsp|OCSP Stapling|1|security"
+
+# Record a missing feature for a site
+# Args: $1 = feature name, $2 = site name
+record_missing_feature() {
+    local feature="$1"
+    local site="$2"
+    MISSING_FEATURES="${MISSING_FEATURES}${feature}:${site}"$'\n'
+}
+
+# Reset recommendation tracking
+reset_recommendations() {
+    MISSING_FEATURES=""
+    TOTAL_SITES_ANALYZED=0
+    ALL_SITES_LIST=""
+}
+
+# Generate and display recommendations
+show_recommendations() {
+    [ -z "$MISSING_FEATURES" ] && return 0
+
+    echo ""
+    echo "═══════════════════════════════════════════════════════════"
+    echo "Recommended Actions"
+    echo "═══════════════════════════════════════════════════════════"
+
+    local recommendations=""
+    local rec_count=0
+
+    # Process each feature type
+    while IFS='|' read -r feat_name display_name is_global cli_feature; do
+        [ -z "$feat_name" ] && continue
+
+        # Count sites missing this feature
+        local missing_sites
+        missing_sites=$(printf '%s' "$MISSING_FEATURES" | grep "^${feat_name}:" | cut -d: -f2 | sort -u || true)
+        local missing_count=0
+        if [ -n "$missing_sites" ]; then
+            missing_count=$(printf '%s\n' "$missing_sites" | wc -l | tr -d ' ')
+        fi
+
+        [ "$missing_count" -eq 0 ] && continue
+
+        rec_count=$((rec_count + 1))
+
+        if [ "$missing_count" -eq "$TOTAL_SITES_ANALYZED" ] && [ "$is_global" = "1" ]; then
+            # All sites missing a global feature - suggest global enable
+            echo ""
+            echo -e "  ${YELLOW}${rec_count}.${NC} Enable ${display_name} globally (affects all $missing_count sites)"
+            echo -e "     ${CYAN}./nginx-optimizer.sh optimize --feature ${cli_feature}${NC}"
+        elif [ "$missing_count" -eq "$TOTAL_SITES_ANALYZED" ]; then
+            # All sites missing a per-site feature
+            echo ""
+            echo -e "  ${YELLOW}${rec_count}.${NC} Enable ${display_name} for all $missing_count sites"
+            echo -e "     ${CYAN}./nginx-optimizer.sh optimize --feature ${cli_feature}${NC}"
+        elif [ "$missing_count" -gt 3 ]; then
+            # Many sites missing - show count
+            echo ""
+            echo -e "  ${YELLOW}${rec_count}.${NC} Enable ${display_name} ($missing_count sites missing)"
+            echo -e "     ${CYAN}./nginx-optimizer.sh optimize --feature ${cli_feature}${NC}"
+        else
+            # Few sites missing - list them
+            local site_list
+            site_list=$(printf '%s' "$missing_sites" | tr '\n' ', ' | sed 's/,$//')
+            echo ""
+            echo -e "  ${YELLOW}${rec_count}.${NC} Enable ${display_name} for: ${site_list}"
+            echo -e "     ${CYAN}./nginx-optimizer.sh optimize --feature ${cli_feature}${NC}"
+        fi
+    done <<< "$FEATURE_META"
+
+    if [ "$rec_count" -eq 0 ]; then
+        echo ""
+        echo -e "  ${GREEN}All optimizations already applied!${NC}"
+        return 0
+    fi
+
+    echo ""
+    echo "───────────────────────────────────────────────────────────"
+    echo -e "  ${CYAN}Quick: Apply all recommendations:${NC}"
+    echo -e "     ${CYAN}./nginx-optimizer.sh optimize${NC}"
+    echo "═══════════════════════════════════════════════════════════"
+
+    # Interactive prompt (only if not in quiet mode and stdout is terminal)
+    if [ "${QUIET:-}" != "true" ] && [ -t 1 ]; then
+        echo ""
+        read -r -p "Apply all optimizations now? [y/N] " response
+        case "$response" in
+            [yY]|[yY][eE][sS])
+                echo ""
+                echo "Running: ./nginx-optimizer.sh optimize --dry-run"
+                echo "(Use --force to apply without dry-run)"
+                # Call optimize in dry-run mode for safety
+                if type -t run_optimize &>/dev/null; then
+                    DRY_RUN=true run_optimize
+                else
+                    ./nginx-optimizer.sh optimize --dry-run
+                fi
+                ;;
+            *)
+                echo "Skipped. Run manually when ready."
+                ;;
+        esac
+    fi
+}
 
 reset_score() {
     SCORE_ENABLED=0
