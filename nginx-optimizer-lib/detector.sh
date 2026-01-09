@@ -1808,31 +1808,70 @@ show_recommendations() {
     fi
 
     echo ""
-    echo "───────────────────────────────────────────────────────────"
-    echo -e "  ${CYAN}Quick: Apply all recommendations:${NC}"
-    echo -e "     ${CYAN}./nginx-optimizer.sh optimize${NC}"
+    echo -e "  ${CYAN}0.${NC} Apply ALL recommendations"
     echo "═══════════════════════════════════════════════════════════"
 
     # Interactive prompt (only if not in quiet mode and stdout is terminal)
     if [ "${QUIET:-}" != "true" ] && [ -t 1 ]; then
         echo ""
-        read -r -p "Apply all optimizations now? [y/N] " response
-        case "$response" in
-            [yY]|[yY][eE][sS])
-                echo ""
-                echo "Running: ./nginx-optimizer.sh optimize --dry-run"
-                echo "(Use --force to apply without dry-run)"
-                # Call optimize in dry-run mode for safety
-                if type -t run_optimize &>/dev/null; then
-                    DRY_RUN=true run_optimize
-                else
-                    ./nginx-optimizer.sh optimize --dry-run
+        read -r -p "Select [1-${rec_count}, 0=all, Enter=skip]: " selection
+
+        # Skip if empty
+        [ -z "$selection" ] && return 0
+
+        # Validate selection
+        if ! [[ "$selection" =~ ^[0-9]+$ ]] || [ "$selection" -gt "$rec_count" ]; then
+            echo "Invalid selection. Skipped."
+            return 0
+        fi
+
+        # Check for lock file
+        local lock_file="${DATA_DIR:-$HOME/.nginx-optimizer}/nginx-optimizer.lock"
+        if [ -f "$lock_file" ]; then
+            echo ""
+            echo -e "${YELLOW}Lock file exists: $lock_file${NC}"
+            read -r -p "Remove stale lock and continue? [y/N] " remove_lock
+            if [[ "$remove_lock" =~ ^[yY] ]]; then
+                rm -f "$lock_file"
+                echo "Lock removed."
+            else
+                echo "Skipped. Remove lock manually if needed."
+                return 0
+            fi
+        fi
+
+        # Build command based on selection
+        local cmd_feature=""
+        if [ "$selection" -eq 0 ]; then
+            echo ""
+            echo "Running: ./nginx-optimizer.sh optimize --dry-run"
+        else
+            # Get the feature for this selection number
+            local current=0
+            while IFS='|' read -r feat_name display_name is_global cli_feature; do
+                [ -z "$feat_name" ] && continue
+                local missing_sites
+                missing_sites=$(printf '%s' "$MISSING_FEATURES" | grep "^${feat_name}:" | cut -d: -f2 | sort -u || true)
+                [ -z "$missing_sites" ] && continue
+                current=$((current + 1))
+                if [ "$current" -eq "$selection" ]; then
+                    cmd_feature="$cli_feature"
+                    break
                 fi
-                ;;
-            *)
-                echo "Skipped. Run manually when ready."
-                ;;
-        esac
+            done <<< "$FEATURE_META"
+            echo ""
+            echo "Running: ./nginx-optimizer.sh optimize --feature $cmd_feature --dry-run"
+        fi
+
+        echo "(Use --force to apply without dry-run)"
+        echo ""
+
+        # Execute
+        if [ -n "$cmd_feature" ]; then
+            ./nginx-optimizer.sh optimize --feature "$cmd_feature" --dry-run
+        else
+            ./nginx-optimizer.sh optimize --dry-run
+        fi
     fi
 }
 
