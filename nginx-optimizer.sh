@@ -477,6 +477,43 @@ cmd_honeypot_fail2ban() {
 }
 
 ################################################################################
+# Interactive Wizard
+################################################################################
+
+show_wizard() {
+    if [ "$QUIET" = true ]; then
+        log_error "No command specified. Use --help for usage."
+        exit 1
+    fi
+
+    echo ""
+    echo "nginx-optimizer v${VERSION} - Interactive Mode"
+    echo ""
+    echo "What would you like to do?"
+    echo ""
+    echo "  1) Analyze     - Scan nginx configs and show missing optimizations"
+    echo "  2) Optimize    - Apply optimizations (with backup)"
+    echo "  3) Rollback    - Restore previous configuration"
+    echo "  4) Status      - Show current optimization status"
+    echo "  5) Help        - Show full help message"
+    echo "  q) Quit"
+    echo ""
+
+    while true; do
+        read -rp "Enter choice [1-5, q]: " choice
+        case "$choice" in
+            1) COMMAND="analyze"; break ;;
+            2) COMMAND="optimize"; break ;;
+            3) COMMAND="rollback"; break ;;
+            4) COMMAND="status"; break ;;
+            5) COMMAND="help"; break ;;
+            q|Q) echo "Goodbye!"; exit 0 ;;
+            *) echo "Invalid choice. Please enter 1-5 or q." ;;
+        esac
+    done
+}
+
+################################################################################
 # Argument Parsing
 ################################################################################
 
@@ -549,8 +586,7 @@ parse_arguments() {
     done
 
     if [ -z "$COMMAND" ]; then
-        show_help
-        exit 1
+        show_wizard
     fi
 }
 

@@ -4,6 +4,28 @@
 # validator.sh - Testing & Validation Functions
 ################################################################################
 
+# Timeout for nginx operations (seconds)
+NGINX_TIMEOUT=30
+
+################################################################################
+# Timeout Wrapper
+################################################################################
+
+run_with_timeout() {
+    local timeout_sec="$1"
+    shift
+
+    # Try 'timeout' command (GNU coreutils)
+    if command -v timeout &>/dev/null; then
+        timeout "$timeout_sec" "$@"
+        return $?
+    fi
+
+    # Fallback: run without timeout (log warning)
+    log_warn "timeout command not available, running without timeout"
+    "$@"
+}
+
 ################################################################################
 # Configuration Testing
 ################################################################################
@@ -17,7 +39,7 @@ test_nginx_config() {
     if command -v nginx &>/dev/null; then
         log_info "Testing system nginx..."
 
-        if nginx -t 2>&1 | tee -a "$LOG_FILE"; then
+        if run_with_timeout $NGINX_TIMEOUT nginx -t 2>&1 | tee -a "$LOG_FILE"; then
             log_success "System nginx configuration is valid"
         else
             log_error "System nginx configuration test failed"
@@ -34,7 +56,7 @@ test_nginx_config() {
             while IFS= read -r container; do
                 log_info "Testing Docker nginx: $container..."
 
-                if docker exec "$container" nginx -t 2>&1 | tee -a "$LOG_FILE"; then
+                if run_with_timeout $NGINX_TIMEOUT docker exec "$container" nginx -t 2>&1 | tee -a "$LOG_FILE"; then
                     log_success "Docker nginx ($container) configuration is valid"
                 else
                     log_error "Docker nginx ($container) configuration test failed"
@@ -48,7 +70,7 @@ test_nginx_config() {
     if docker ps --format "{{.Names}}" | grep -q "wp-test-proxy"; then
         log_info "Testing wp-test nginx-proxy..."
 
-        if docker exec wp-test-proxy nginx -t 2>&1 | tee -a "$LOG_FILE"; then
+        if run_with_timeout $NGINX_TIMEOUT docker exec wp-test-proxy nginx -t 2>&1 | tee -a "$LOG_FILE"; then
             log_success "wp-test nginx-proxy configuration is valid"
         else
             log_error "wp-test nginx-proxy configuration test failed"
@@ -336,6 +358,62 @@ comprehensive_site_test() {
 }
 
 ################################################################################
+# Health Check
+################################################################################
+
+health_check_sites() {
+    local target_site="$1"
+
+    log_info "Running post-optimization health check..."
+
+    local failed=0
+    local checked=0
+
+    # Check wp-test sites
+    if [ -d "$WP_TEST_SITES" ]; then
+        for site_dir in "$WP_TEST_SITES"/*; do
+            if [ -d "$site_dir" ]; then
+                local domain
+                domain=$(basename "$site_dir")
+
+                # Skip if targeting specific site and this isn't it
+                if [ -n "$target_site" ] && [ "$domain" != "$target_site" ]; then
+                    continue
+                fi
+
+                ((checked++))
+                local url="https://${domain}"
+
+                # Use -k to allow self-signed certs (common in dev)
+                local status
+                status=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 10 "$url" 2>/dev/null)
+
+                if [ "$status" = "200" ] || [ "$status" = "301" ] || [ "$status" = "302" ]; then
+                    log_success "  $domain: HTTP $status OK"
+                else
+                    log_error "  $domain: HTTP $status FAILED"
+                    ((failed++))
+                fi
+            fi
+        done
+    fi
+
+    if [ $checked -eq 0 ]; then
+        log_info "No sites to health check"
+        return 0
+    fi
+
+    if [ $failed -gt 0 ]; then
+        log_error "Health check failed: $failed/$checked sites not responding"
+        log_warn "Consider running: nginx-optimizer rollback"
+        return 1
+    fi
+
+    log_success "Health check passed: $checked/$checked sites responding"
+    return 0
+}
+
+################################################################################
 # Reload Functions
 ################################################################################
 
@@ -444,6 +522,9 @@ validate_and_reload() {
 
     # Restart PHP-FPM if OpCache was modified
     restart_php_fpm
+
+    # Run health check after reload
+    health_check_sites "$target_site"
 
     log_success "Validation and reload complete"
 }
