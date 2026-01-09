@@ -8,20 +8,28 @@ Comprehensive NGINX optimization tool with HTTP/3, Brotli, FastCGI cache, Redis,
 
 ## Installation
 
-Clone or download to your preferred location:
+### One-liner (Recommended)
+```bash
+curl -fsSL https://raw.githubusercontent.com/MarcinDudekDev/nginx-optimizer/main/install.sh | bash
+```
+
+### Homebrew (macOS)
+```bash
+brew install --HEAD MarcinDudekDev/tap/nginx-optimizer
+```
+
+### Manual
 ```bash
 git clone https://github.com/MarcinDudekDev/nginx-optimizer.git ~/Tools/nginx-optimizer
-```
-
-Make sure it's executable:
-```bash
 chmod +x ~/Tools/nginx-optimizer/nginx-optimizer.sh
-```
-
-Add to PATH (optional):
-```bash
 echo 'export PATH="$PATH:$HOME/Tools/nginx-optimizer"' >> ~/.zshrc
 source ~/.zshrc
+```
+
+### Man Page
+```bash
+sudo cp docs/nginx-optimizer.1 /usr/share/man/man1/
+man nginx-optimizer
 ```
 
 ## Features
@@ -101,6 +109,7 @@ nginx-optimizer optimize --exclude brotli
 | `status [site]` | Show optimization status |
 | `list` | List all detected nginx installations |
 | `benchmark [site]` | Run performance tests |
+| `update` | Self-update from GitHub |
 | `help` | Show help message |
 
 ## Options
@@ -113,6 +122,7 @@ nginx-optimizer optimize --exclude brotli
 | `--exclude <name>` | Skip specific feature |
 | `--backup-dir <path>` | Custom backup location |
 | `--quiet` | Suppress output (for scripting) |
+| `--json` | Output JSON (for status, list, analyze) |
 | `-v, --version` | Show version |
 
 ## Available Features

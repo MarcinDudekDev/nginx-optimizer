@@ -531,11 +531,19 @@ After Path B: v1.0.0 (production ready)
 - [ ] Man page (nginx-optimizer.1) - deferred to Phase 5
 - [ ] Homebrew formula - deferred to Phase 5
 
-### Future - Phase 5: Advanced Features
+### Completed - Phase 5 (2025-01-09)
+- [x] Man page (docs/nginx-optimizer.1)
+- [x] Homebrew formula (homebrew/nginx-optimizer.rb)
+- [x] Self-update command (`nginx-optimizer update`)
+- [x] JSON output mode (--json flag)
+- [ ] APT/RPM packages - deferred
+- [ ] Ansible role - deferred
+
+### Future - Phase 6: Nice-to-Have
 ```
 1. [ ] Interactive wizard with feature selection menu
-2. [ ] JSON output mode (--json)
-3. [ ] Self-update command
-4. [ ] APT/RPM packages
-5. [ ] Ansible role
+2. [ ] Full JSON output (not placeholder)
+3. [ ] APT/RPM packages
+4. [ ] Ansible role
+5. [ ] Terraform provider
 ```
