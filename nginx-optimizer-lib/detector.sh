@@ -1201,6 +1201,53 @@ check_tls_versions() {
     echo "$tls_versions"
 }
 
+# Check if www variant is missing from SSL server block
+# Returns 0 if www is properly handled, 1 if missing
+check_www_ssl_mismatch() {
+    local config_file="$1"
+    local site_name="$2"
+    LAST_DIRECTIVE_SOURCE=""
+
+    # Skip if site already starts with www
+    [[ "$site_name" == www.* ]] && return 0
+
+    # Skip if no SSL configured
+    if ! grep -v '^\s*#' "$config_file" 2>/dev/null | grep -q "listen.*443.*ssl"; then
+        return 0
+    fi
+
+    # Check if there's a www redirect on port 80 (indicates www should work)
+    local has_www_redirect=false
+    if grep -v '^\s*#' "$config_file" 2>/dev/null | grep -q "server_name.*www\\.${site_name}"; then
+        has_www_redirect=true
+    fi
+
+    # If no www handling at all, skip (site doesn't use www)
+    [ "$has_www_redirect" = false ] && return 0
+
+    # Extract server blocks with SSL (tracking brace depth for nested blocks)
+    local ssl_block
+    ssl_block=$(awk '
+        /^[[:space:]]*server[[:space:]]*\{/ && !in_server { in_server=1; depth=1; block=""; next }
+        in_server && /\{/ { depth++ }
+        in_server && /\}/ { depth-- }
+        in_server { block = block $0 "\n" }
+        in_server && depth == 0 {
+            if (block ~ /listen.*443.*ssl/) print block
+            in_server=0
+        }
+    ' "$config_file" 2>/dev/null)
+
+    # Check if SSL block has www.domain in server_name
+    if echo "$ssl_block" | grep -q "server_name.*www\\.${site_name}"; then
+        LAST_DIRECTIVE_SOURCE="$config_file"
+        return 0
+    fi
+
+    # www is used but not in SSL block - this is a mismatch
+    return 1
+}
+
 ################################################################################
 # Per-Site Analysis Functions
 ################################################################################
@@ -1469,6 +1516,15 @@ analyze_single_site() {
         fi
     else
         echo -e "    ${YELLOW}✗ TLS Versions: not configured${NC}"
+    fi
+
+    # WWW/SSL Mismatch check (only for non-www sites with SSL)
+    if check_www_ssl_mismatch "$config_file" "$site_name"; then
+        # Either no www handling needed, or www is properly configured
+        :
+    else
+        printf "    ${YELLOW}✗${NC} %-22s\n" "WWW in SSL"
+        record_missing_feature "www-ssl" "$site_name"
     fi
 
     # Show site score
@@ -1857,7 +1913,8 @@ gzip|Gzip Compression|1|compression
 security|Security Headers|0|security
 rate-limiting|Rate Limiting|0|security
 wordpress|WordPress Exclusions|0|wordpress
-ocsp|OCSP Stapling|1|security"
+ocsp|OCSP Stapling|1|security
+www-ssl|WWW in SSL Block|0|www-ssl"
 
 # Record a missing feature for a site
 # Args: $1 = feature name, $2 = site name

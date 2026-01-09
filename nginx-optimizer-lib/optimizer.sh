@@ -459,9 +459,12 @@ apply_optimizations() {
             opcache|php)
                 optimize_opcache "$target_site"
                 ;;
+            www-ssl|www)
+                optimize_www_ssl "$target_site"
+                ;;
             *)
                 log_warn "Unknown feature: $feature"
-                log_info "Valid features: http3, fastcgi-cache, redis, brotli, security, wordpress, opcache"
+                log_info "Valid features: http3, fastcgi-cache, redis, brotli, security, wordpress, opcache, www-ssl"
                 ;;
         esac
     done
@@ -1410,6 +1413,106 @@ apply_opcache_config() {
         fi
     else
         log_warn "PHP not found in PATH"
+    fi
+}
+
+################################################################################
+# WWW/SSL Fix
+################################################################################
+
+optimize_www_ssl() {
+    local target_site="$1"
+
+    log_info "Optimizing: WWW in SSL blocks..."
+
+    if [ "$DRY_RUN" = true ]; then
+        log_info "[DRY RUN] Would add www variants to SSL server_name directives"
+    fi
+
+    # Process each site config
+    for site_conf in /etc/nginx/sites-enabled/*; do
+        [ -f "$site_conf" ] || continue
+
+        local config_name
+        config_name=$(basename "$site_conf")
+
+        # Skip if targeting specific site and this isn't it
+        if [ -n "$target_site" ] && [[ "$config_name" != *"$target_site"* ]]; then
+            continue
+        fi
+
+        # Skip if no SSL
+        if ! grep -v '^\s*#' "$site_conf" 2>/dev/null | grep -q "listen.*443.*ssl"; then
+            continue
+        fi
+
+        # Extract base domain from SSL server_name (non-www version)
+        local base_domain
+        base_domain=$(awk '
+            /^[[:space:]]*server[[:space:]]*\{/ { in_server=1; next }
+            in_server && /listen.*443.*ssl/ { is_ssl=1 }
+            in_server && is_ssl && /server_name[[:space:]]+([^w]|w[^w])/ {
+                # Get first non-www domain
+                for (i=2; i<=NF; i++) {
+                    gsub(/;/, "", $i)
+                    if ($i !~ /^www\./ && $i !~ /^$/) {
+                        print $i
+                        exit
+                    }
+                }
+            }
+            in_server && /^\}/ { in_server=0; is_ssl=0 }
+        ' "$site_conf")
+
+        [ -z "$base_domain" ] && continue
+
+        # Check if www redirect exists on port 80 (indicates www should work)
+        if ! grep -v '^\s*#' "$site_conf" 2>/dev/null | grep -q "server_name.*www\\.${base_domain}"; then
+            continue
+        fi
+
+        # Check if SSL block already has www
+        if awk -v domain="$base_domain" '
+            /^[[:space:]]*server[[:space:]]*\{/ { in_server=1; has_ssl=0; next }
+            in_server && /listen.*443.*ssl/ { has_ssl=1 }
+            in_server && has_ssl && /server_name.*www\./ && $0 ~ domain { found=1 }
+            in_server && /^\}/ { in_server=0; has_ssl=0 }
+            END { exit !found }
+        ' "$site_conf" 2>/dev/null; then
+            log_info "Already has www in SSL: $config_name"
+            continue
+        fi
+
+        log_info "Adding www.$base_domain to SSL block in: $config_name"
+
+        if [ "$DRY_RUN" = true ]; then
+            log_info "[DRY RUN] Would modify: $site_conf"
+            log_info "[DRY RUN]   server_name $base_domain; -> server_name $base_domain www.$base_domain;"
+            continue
+        fi
+
+        # Backup before modifying
+        local backup_file="${site_conf}.wwwbak"
+        sudo cp "$site_conf" "$backup_file"
+
+        # Use sed to add www to server_name in SSL blocks
+        # This is safe because we've verified the pattern exists
+        sudo sed -i "s/server_name ${base_domain};/server_name ${base_domain} www.${base_domain};/g" "$site_conf"
+
+        # Test config
+        if nginx -t 2>&1 | grep -q "test failed\|emerg"; then
+            log_error "Config test failed after modification, restoring: $config_name"
+            sudo mv "$backup_file" "$site_conf"
+            continue
+        fi
+
+        sudo rm -f "$backup_file"
+        log_success "Added www.$base_domain to SSL block: $config_name"
+        APPLIED_OPTIMIZATIONS+=("WWW in SSL: $base_domain")
+    done
+
+    if [ ${#APPLIED_OPTIMIZATIONS[@]} -gt 0 ] 2>/dev/null; then
+        log_success "WWW/SSL optimization complete"
     fi
 }
 
