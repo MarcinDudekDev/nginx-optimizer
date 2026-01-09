@@ -1951,19 +1951,10 @@ show_recommendations() {
             return 0
         fi
 
-        # Check for lock file
-        local lock_file="${DATA_DIR:-$HOME/.nginx-optimizer}/nginx-optimizer.lock"
-        if [ -f "$lock_file" ]; then
-            echo ""
-            echo -e "${YELLOW}Lock file exists: $lock_file${NC}"
-            read -r -p "Remove stale lock and continue? [y/N] " remove_lock
-            if [[ "$remove_lock" =~ ^[yY] ]]; then
-                rm -f "$lock_file"
-                echo "Lock removed."
-            else
-                echo "Skipped. Remove lock manually if needed."
-                return 0
-            fi
+        # Release our lock before spawning optimize (it will acquire its own)
+        local lock_dir="${DATA_DIR:-$HOME/.nginx-optimizer}/nginx-optimizer.lock"
+        if [ -d "$lock_dir" ]; then
+            rm -rf "$lock_dir" 2>/dev/null || true
         fi
 
         # Build command based on selection
