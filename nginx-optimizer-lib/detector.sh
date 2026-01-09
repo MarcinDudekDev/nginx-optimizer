@@ -243,6 +243,24 @@ list_nginx_instances() {
 SITE_FILTER_CACHE=""
 SITE_FILTER_CACHE_BUILT=false
 
+# Cached main nginx.conf path (computed once, used many times)
+CACHED_MAIN_NGINX_CONF=""
+CACHED_MAIN_NGINX_CONF_SET=false
+
+# Get cached main nginx.conf path
+get_main_nginx_conf() {
+    if [ "$CACHED_MAIN_NGINX_CONF_SET" = true ]; then
+        printf '%s' "$CACHED_MAIN_NGINX_CONF"
+        return
+    fi
+
+    if type -t list_parsed_files &>/dev/null; then
+        CACHED_MAIN_NGINX_CONF=$(list_parsed_files | grep "nginx\.conf$" | head -n1)
+    fi
+    CACHED_MAIN_NGINX_CONF_SET=true
+    printf '%s' "$CACHED_MAIN_NGINX_CONF"
+}
+
 # Build site filter cache for ALL sites at once (called once, used many times)
 # This is the key optimization - parse config once, lookup instantly per site
 build_site_filter_cache() {
@@ -250,77 +268,84 @@ build_site_filter_cache() {
         return 0
     fi
 
-    local config
+    local config_file=""
     # Get nginx config (use parser cache if available)
     if [ -n "$PARSED_CONFIG_CACHE" ] && [ -f "$PARSED_CONFIG_CACHE" ]; then
-        config=$(cat "$PARSED_CONFIG_CACHE")
-    elif docker ps --format "{{.Names}}" 2>/dev/null | grep -q "wp-test-proxy"; then
-        config=$(docker exec wp-test-proxy nginx -T 2>/dev/null)
+        config_file="$PARSED_CONFIG_CACHE"
     else
-        config=$(get_nginx_compiled_config)
+        # Create temp file with config
+        config_file=$(mktemp)
+        if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "wp-test-proxy"; then
+            docker exec wp-test-proxy nginx -T 2>/dev/null > "$config_file"
+        else
+            get_nginx_compiled_config > "$config_file"
+        fi
     fi
 
-    if [ -z "$config" ]; then
+    if [ ! -s "$config_file" ]; then
+        [ "$config_file" != "$PARSED_CONFIG_CACHE" ] && rm -f "$config_file"
         return 1
     fi
 
-    # Build cache: parse ALL server blocks, map each server_name to its files
-    local cache_entries=""
-    local current_file=""
-    local in_server_block=false
-    local server_names=""
-    local server_block_files=""
-    local main_nginx_conf=""
-    local brace_depth=0
+    # FAST: Use awk instead of slow bash while-read
+    SITE_FILTER_CACHE=$(awk '
+    BEGIN { main_conf = "" }
+    /^###FILE:/ || /^#.*configuration file [^:]+:$/ {
+        if (/^###FILE:/) {
+            current_file = substr($0, 9)
+        } else {
+            match($0, /configuration file ([^:]+):/, arr)
+            if (arr[1]) current_file = arr[1]
+        }
+        if (current_file ~ /nginx\.conf$/ && main_conf == "") main_conf = current_file
+        next
+    }
+    /^[[:space:]]*server[[:space:]]*\{/ {
+        in_server = 1
+        depth = 1
+        server_names = ""
+        server_files = current_file
+        next
+    }
+    in_server {
+        # Count braces
+        n = gsub(/\{/, "{")
+        m = gsub(/\}/, "}")
+        depth += n - m
 
-    while IFS= read -r line; do
-        # Track current config file
-        if [[ "$line" =~ ^#.*configuration\ file\ ([^:]+):$ ]] || [[ "$line" =~ ^###FILE:(.+)$ ]]; then
-            current_file="${BASH_REMATCH[1]}"
-            [[ "$current_file" =~ nginx\.conf$ ]] && [ -z "$main_nginx_conf" ] && main_nginx_conf="$current_file"
-        fi
+        # Capture server_name
+        if (/server_name[[:space:]]+/) {
+            sub(/.*server_name[[:space:]]+/, "")
+            sub(/;.*/, "")
+            gsub(/[[:space:]]+/, " ")
+            n = split($0, names, " ")
+            for (i = 1; i <= n; i++) {
+                if (names[i] !~ /^(localhost|_|default_server)$/) {
+                    if (server_names != "") server_names = server_names " "
+                    server_names = server_names names[i]
+                }
+            }
+        }
 
-        # Track server blocks
-        if [[ "$line" =~ ^[[:space:]]*server[[:space:]]*\{ ]]; then
-            in_server_block=true
-            server_names=""
-            server_block_files="$current_file"
-            brace_depth=1
-        elif [ "$in_server_block" = true ]; then
-            # Count braces
-            local open_b=${line//[^\{]/}
-            local close_b=${line//[^\}]/}
-            brace_depth=$((brace_depth + ${#open_b} - ${#close_b}))
+        # Track files
+        if (current_file != "" && index(server_files, current_file) == 0) {
+            server_files = server_files ":" current_file
+        }
 
-            # Capture server_name values
-            if [[ "$line" =~ server_name[[:space:]]+([^;]+) ]]; then
-                local names="${BASH_REMATCH[1]}"
-                for name in $names; do
-                    [[ "$name" =~ ^(localhost|_|default_server)$ ]] && continue
-                    [ -n "$server_names" ] && server_names="$server_names "
-                    server_names="$server_names$name"
-                done
-            fi
+        # End of server block
+        if (depth == 0) {
+            in_server = 0
+            n = split(server_names, names, " ")
+            for (i = 1; i <= n; i++) {
+                files = server_files
+                if (main_conf != "") files = main_conf ":" files
+                print names[i] "|" files
+            }
+        }
+    }
+    ' "$config_file")
 
-            # Track file
-            if [ -n "$current_file" ] && [[ ! "$server_block_files" =~ "$current_file" ]]; then
-                server_block_files="$server_block_files:$current_file"
-            fi
-
-            # End of server block - save to cache
-            if [ $brace_depth -eq 0 ]; then
-                in_server_block=false
-                for name in $server_names; do
-                    # Add main nginx.conf to each site's files
-                    local files_with_main="$server_block_files"
-                    [ -n "$main_nginx_conf" ] && files_with_main="$main_nginx_conf:$files_with_main"
-                    cache_entries="${cache_entries}${name}|${files_with_main}"$'\n'
-                done
-            fi
-        fi
-    done <<< "$config"
-
-    SITE_FILTER_CACHE="$cache_entries"
+    [ "$config_file" != "$PARSED_CONFIG_CACHE" ] && rm -f "$config_file"
     SITE_FILTER_CACHE_BUILT=true
 }
 
@@ -475,39 +500,17 @@ check_directive_for_site() {
         return 1
     fi
 
-    # Site-filtered check: only look in relevant files
-    local config
-    if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "wp-test-proxy"; then
-        config=$(docker exec wp-test-proxy nginx -T 2>/dev/null)
-    else
-        config=$(get_nginx_compiled_config)
-    fi
-
-    if [ -z "$config" ]; then
-        return 1
-    fi
-
-    local current_file=""
-    local found=false
-
-    while IFS= read -r line; do
-        # Track current config file
-        if [[ "$line" =~ ^#.*configuration\ file\ ([^:]+):$ ]]; then
-            current_file="${BASH_REMATCH[1]}"
-        fi
-
-        # Check if this line matches pattern and file is relevant
-        if echo "$line" | grep -qE "$pattern"; then
-            if is_file_relevant_to_site "$current_file"; then
-                LAST_DIRECTIVE_SOURCE="$current_file"
-                found=true
-                break
+    # OPTIMIZED: Use parser cache with site filtering
+    # Loop through site's relevant files (2-3 files) instead of 700+ lines
+    if type -t directive_exists_in_file &>/dev/null && [ -n "${PARSED_CONFIG_CACHE:-}" ]; then
+        local file
+        while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            if directive_exists_in_file "$file" "$pattern"; then
+                LAST_DIRECTIVE_SOURCE="$file"
+                return 0
             fi
-        fi
-    done <<< "$config"
-
-    if [ "$found" = true ]; then
-        return 0
+        done <<< "$SITE_RELEVANT_FILES"
     fi
 
     return 1
@@ -1092,6 +1095,24 @@ check_tls_versions() {
 # Per-Site Analysis Functions
 ################################################################################
 
+# Map regex pattern to feature name for fast cache lookup
+pattern_to_feature() {
+    local pattern="$1"
+    case "$pattern" in
+        *quic*) echo "http3" ;;
+        *fastcgi_cache*) echo "fastcgi_cache" ;;
+        *brotli*) echo "brotli" ;;
+        *gzip*) echo "gzip" ;;
+        *Strict-Transport*) echo "security_headers" ;;
+        *limit_req*) echo "rate_limiting" ;;
+        *xmlrpc*) echo "wordpress" ;;
+        *ssl_stapling*) echo "ocsp" ;;
+        *TLSv1.3*) echo "tls13" ;;
+        *TLSv1.2*) echo "tls12" ;;
+        *) echo "" ;;
+    esac
+}
+
 # Check if feature exists for a specific site
 # Args: $1 = pattern (regex)
 #       $2 = site name
@@ -1104,31 +1125,43 @@ check_feature_for_site() {
 
     LAST_DIRECTIVE_SOURCE=""
 
-    # Strategy 1: Use parser to check in site's config file directly
-    if type -t directive_exists_in_file &>/dev/null; then
-        if directive_exists_in_file "$config_file" "$pattern"; then
+    # FAST PATH: Use pre-built feature cache (1 awk pass vs 99)
+    local feature
+    feature=$(pattern_to_feature "$pattern")
+    if [ -n "$feature" ] && type -t has_feature_in_file &>/dev/null; then
+        # Check in site's config file
+        if has_feature_in_file "$config_file" "$feature"; then
             LAST_DIRECTIVE_SOURCE="$config_file"
             return 0
         fi
-    fi
 
-    # Strategy 2: Check in files included by site's server block (via site filtering)
-    if [ "$SITE_FILTERING_ACTIVE" = true ]; then
-        if check_directive_for_site "$pattern" "$site_name"; then
+        # Check in site's relevant files (if site filtering active)
+        if [ "$SITE_FILTERING_ACTIVE" = true ] && [ -n "$SITE_RELEVANT_FILES" ]; then
+            local file
+            while IFS= read -r file; do
+                [ -z "$file" ] && continue
+                if has_feature_in_file "$file" "$feature"; then
+                    LAST_DIRECTIVE_SOURCE="$file"
+                    return 0
+                fi
+            done <<< "$SITE_RELEVANT_FILES"
+        fi
+
+        # Check in main nginx.conf (global features like gzip)
+        local main_nginx_conf
+        main_nginx_conf=$(get_main_nginx_conf)
+        if [ -n "$main_nginx_conf" ] && has_feature_in_file "$main_nginx_conf" "$feature"; then
+            LAST_DIRECTIVE_SOURCE="$main_nginx_conf"
             return 0
         fi
+
+        return 1
     fi
 
-    # Strategy 3: For global features (gzip, brotli in http block),
-    # check if defined globally in main nginx.conf
-    local main_nginx_conf=""
-    if type -t list_parsed_files &>/dev/null; then
-        main_nginx_conf=$(list_parsed_files | grep "nginx\.conf$" | head -n1)
-    fi
-
-    if [ -n "$main_nginx_conf" ] && type -t directive_exists_in_file &>/dev/null; then
-        if directive_exists_in_file "$main_nginx_conf" "$pattern"; then
-            LAST_DIRECTIVE_SOURCE="$main_nginx_conf"
+    # SLOW FALLBACK: For unknown patterns, use regex search
+    if type -t directive_exists_in_file &>/dev/null; then
+        if directive_exists_in_file "$config_file" "$pattern"; then
+            LAST_DIRECTIVE_SOURCE="$config_file"
             return 0
         fi
     fi
@@ -1615,9 +1648,13 @@ analyze_optimizations() {
         fi
     fi
 
-    # Pre-build site filter cache ONCE (major performance optimization)
+    # Pre-build caches ONCE (major performance optimization)
     # This parses config once upfront, then each site uses instant cache lookup
     build_site_filter_cache
+    # Build feature cache for instant feature lookups (1 awk call vs 99)
+    if type -t build_feature_cache &>/dev/null; then
+        build_feature_cache
+    fi
 
     # Get all sites from parser
     local sites

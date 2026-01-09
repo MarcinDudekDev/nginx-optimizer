@@ -23,6 +23,29 @@
 # Storage: temp file path for parsed config data
 PARSED_CONFIG_CACHE=""
 
+# Memoization cache for directive_exists_in_file results
+# Format: "file_pattern|directive_pattern|0_or_1" per line
+# Avoids repeated slow while-read loops for same queries
+DIRECTIVE_LOOKUP_CACHE=""
+
+# Batch feature cache - ALL features extracted in ONE pass
+# Format: "filepath|feature1,feature2,feature3" per line
+# Built once at start, instant lookup after
+FEATURE_CACHE=""
+FEATURE_CACHE_BUILT=false
+
+# Feature patterns to detect (feature_name:regex)
+FEATURE_PATTERNS="http3:listen.*quic
+fastcgi_cache:fastcgi_cache[^_]
+brotli:brotli on
+gzip:gzip on
+security_headers:Strict-Transport-Security
+rate_limiting:limit_req
+wordpress:xmlrpc
+ocsp:ssl_stapling on
+tls13:TLSv1.3
+tls12:TLSv1.2"
+
 ################################################################################
 # Initialization & Cleanup
 ################################################################################
@@ -33,6 +56,9 @@ parser_init() {
     if [ -n "$PARSED_CONFIG_CACHE" ] && [ -f "$PARSED_CONFIG_CACHE" ]; then
         rm -f "$PARSED_CONFIG_CACHE"
     fi
+
+    # Clear memoization cache
+    DIRECTIVE_LOOKUP_CACHE=""
 
     # Create temp file (compatible with macOS and Linux)
     PARSED_CONFIG_CACHE=$(mktemp "${TMPDIR:-/tmp}/nginx-parser.XXXXXX")
@@ -51,6 +77,66 @@ parser_cleanup() {
         rm -f "$PARSED_CONFIG_CACHE"
         PARSED_CONFIG_CACHE=""
     fi
+}
+
+# Build feature cache - ONE pass extracts ALL features for ALL files
+# This is the key performance optimization: 1 awk call vs 99 awk calls
+build_feature_cache() {
+    if [ "$FEATURE_CACHE_BUILT" = true ]; then
+        return 0
+    fi
+
+    if [ -z "$PARSED_CONFIG_CACHE" ] || [ ! -f "$PARSED_CONFIG_CACHE" ]; then
+        return 1
+    fi
+
+    # ONE awk pass extracts ALL features for ALL files
+    FEATURE_CACHE=$(awk '
+        /^###FILE:/ {
+            # Save previous file features
+            if (current_file != "" && features != "") {
+                print current_file "|" features
+            }
+            current_file = substr($0, 9)
+            features = ""
+            next
+        }
+        /listen.*quic/ { if (index(features,"http3")==0) features = features (features?",":"") "http3" }
+        /fastcgi_cache[^_]/ { if (index(features,"fastcgi_cache")==0) features = features (features?",":"") "fastcgi_cache" }
+        /brotli on/ { if (index(features,"brotli")==0) features = features (features?",":"") "brotli" }
+        /gzip on/ { if (index(features,"gzip")==0) features = features (features?",":"") "gzip" }
+        /Strict-Transport-Security/ { if (index(features,"security_headers")==0) features = features (features?",":"") "security_headers" }
+        /limit_req/ { if (index(features,"rate_limiting")==0) features = features (features?",":"") "rate_limiting" }
+        /xmlrpc/ { if (index(features,"wordpress")==0) features = features (features?",":"") "wordpress" }
+        /ssl_stapling on/ { if (index(features,"ocsp")==0) features = features (features?",":"") "ocsp" }
+        /TLSv1\.3/ { if (index(features,"tls13")==0) features = features (features?",":"") "tls13" }
+        /TLSv1\.2/ { if (index(features,"tls12")==0) features = features (features?",":"") "tls12" }
+        END {
+            if (current_file != "" && features != "") {
+                print current_file "|" features
+            }
+        }
+    ' "$PARSED_CONFIG_CACHE")
+
+    FEATURE_CACHE_BUILT=true
+}
+
+# Check if feature exists in file (INSTANT lookup from pre-built cache)
+# Args: $1 = file path (partial match OK)
+#       $2 = feature name (http3, fastcgi_cache, gzip, etc)
+# Returns: 0 if found, 1 if not
+has_feature_in_file() {
+    local file_pattern="$1"
+    local feature="$2"
+
+    # Build cache if needed (only runs once)
+    [ "$FEATURE_CACHE_BUILT" != true ] && build_feature_cache
+
+    # INSTANT: grep the small in-memory cache
+    if echo "$FEATURE_CACHE" | grep -F "$file_pattern" | grep -qF "$feature"; then
+        return 0
+    fi
+    return 1
 }
 
 ################################################################################
@@ -366,28 +452,39 @@ directive_exists_in_file() {
         return 1
     fi
 
-    # Extract content for matching file sections and search with grep
-    # This is more reliable than awk regex for complex patterns
-    local in_target=false
-    local found=false
+    # Check memoization cache first (FAST PATH)
+    local cache_key="${file_pattern}|${directive_pattern}"
+    local cached_result
+    cached_result=$(printf '%s' "$DIRECTIVE_LOOKUP_CACHE" | grep -F "$cache_key|" | head -n1)
+    if [ -n "$cached_result" ]; then
+        # Return cached result (0=found, 1=not found)
+        local result="${cached_result##*|}"
+        return "$result"
+    fi
 
-    while IFS= read -r line; do
-        if [[ "$line" =~ ^###FILE: ]]; then
-            local current_file="${line#\#\#\#FILE:}"
-            if [[ "$current_file" =~ $file_pattern ]]; then
-                in_target=true
-            else
-                in_target=false
-            fi
-        elif [ "$in_target" = true ]; then
-            if echo "$line" | grep -qE "$directive_pattern"; then
-                found=true
-                break
-            fi
-        fi
-    done < "$PARSED_CONFIG_CACHE"
+    # FAST PATH: Use awk instead of slow bash while-read
+    # awk processes files 10-100x faster than bash loops
+    local found
+    found=$(awk -v file_pat="$file_pattern" -v dir_pat="$directive_pattern" '
+        /^###FILE:/ {
+            current_file = substr($0, 9)
+            in_target = (current_file ~ file_pat) ? 1 : 0
+            next
+        }
+        in_target && $0 ~ dir_pat {
+            print "1"
+            exit
+        }
+    ' "$PARSED_CONFIG_CACHE")
 
-    [ "$found" = true ]
+    # Cache and return result
+    if [ "$found" = "1" ]; then
+        DIRECTIVE_LOOKUP_CACHE="${DIRECTIVE_LOOKUP_CACHE}${cache_key}|0"$'\n'
+        return 0
+    else
+        DIRECTIVE_LOOKUP_CACHE="${DIRECTIVE_LOOKUP_CACHE}${cache_key}|1"$'\n'
+        return 1
+    fi
 }
 
 # List all parsed files
