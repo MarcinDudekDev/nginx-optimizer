@@ -114,7 +114,9 @@ download_nginx_source() {
 download_brotli_module() {
     if [ -d "ngx_brotli" ]; then
         log_info "Brotli module already exists, updating..."
-        cd ngx_brotli && git pull && git submodule update --init --recursive && cd ..
+        cd ngx_brotli || { log_error "Failed to cd to ngx_brotli"; return 1; }
+        git pull && git submodule update --init --recursive
+        cd .. || return 1
     else
         git clone --recurse-submodules https://github.com/google/ngx_brotli.git
     fi
@@ -129,20 +131,22 @@ build_brotli_library() {
     }
 
     # Create build directory
-    mkdir -p out && cd out
+    mkdir -p out && cd out || exit 1
 
     # Build using cmake if available, otherwise use manual approach
     if command -v cmake &>/dev/null; then
+        local num_cpus
+        num_cpus=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
         cmake -DCMAKE_BUILD_TYPE=Release \
               -DBUILD_SHARED_LIBS=OFF \
               -DCMAKE_C_FLAGS="-fPIC" \
               -DCMAKE_INSTALL_PREFIX=./installed \
               ..
-        make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
+        make -j"$num_cpus"
     else
         # Fallback: manual compilation
         log_info "cmake not found, using manual build..."
-        cd ..
+        cd .. || return 1
 
         # Compile brotli common
         gcc -c -fPIC -O2 -I./c/include \
@@ -201,7 +205,9 @@ configure_nginx() {
 }
 
 compile_nginx() {
-    make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
+    local num_cpus
+    num_cpus=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
+    make -j"$num_cpus"
 }
 
 install_nginx() {
@@ -240,4 +246,3 @@ rollback_nginx() {
         log_error "No backup found!"
     fi
 }
-

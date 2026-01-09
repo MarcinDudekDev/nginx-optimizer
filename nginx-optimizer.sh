@@ -25,6 +25,7 @@ TEMPLATE_DIR="${SCRIPT_DIR}/nginx-optimizer-templates"
 DATA_DIR="${HOME}/.nginx-optimizer"
 BACKUP_DIR="${DATA_DIR}/backups"
 LOG_DIR="${DATA_DIR}/logs"
+# shellcheck disable=SC2034  # Reserved for future config file support
 CONFIG_FILE="${DATA_DIR}/config.json"
 
 # Log file with timestamp
@@ -39,10 +40,12 @@ NC='\033[0m' # No Color
 
 # Options
 DRY_RUN=false
+# shellcheck disable=SC2034  # Used by sourced library files (compiler.sh, optimizer.sh)
 FORCE=false
 QUIET=false
 SPECIFIC_FEATURE=""
 EXCLUDE_FEATURE=""
+# shellcheck disable=SC2034  # Used by sourced library files (backup.sh)
 CUSTOM_BACKUP_DIR=""
 TARGET_SITE=""
 
@@ -491,6 +494,7 @@ parse_arguments() {
                 shift
                 ;;
             --force)
+                # shellcheck disable=SC2034  # Used by sourced library files
                 FORCE=true
                 shift
                 ;;
@@ -519,6 +523,7 @@ parse_arguments() {
                     log_error "--backup-dir requires a path"
                     exit 1
                 fi
+                # shellcheck disable=SC2034  # Used by sourced library files
                 CUSTOM_BACKUP_DIR="$2"
                 shift 2
                 ;;

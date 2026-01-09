@@ -9,6 +9,7 @@
 ################################################################################
 
 setup_monitoring() {
+    # shellcheck disable=SC2034  # Reserved for site-specific monitoring
     local target_site="$1"
 
     log_info "Setting up nginx monitoring..."

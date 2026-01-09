@@ -12,6 +12,7 @@ NGINX_LOCATIONS=(
     "/usr/local/nginx/conf/nginx.conf"
 )
 
+# shellcheck disable=SC2034  # Used by optimizer.sh for site detection
 SITE_CONFIGS=(
     "/etc/nginx/sites-enabled/"
     "/etc/nginx/conf.d/"

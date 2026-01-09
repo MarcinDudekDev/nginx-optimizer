@@ -411,4 +411,3 @@ verify_path_accessible_in_container() {
         return 1
     fi
 }
-

@@ -249,7 +249,7 @@ test_rate_limiting() {
     local blocked=0
     local status
 
-    for i in $(seq 1 $requests); do
+    for _ in $(seq 1 $requests); do
         status=$(curl -s -o /dev/null -w "%{http_code}" "$url" 2>/dev/null)
 
         if [ "$status" = "429" ] || [ "$status" = "503" ]; then
@@ -405,7 +405,7 @@ restart_php_fpm() {
     # Find PHP version
     if command -v systemctl &>/dev/null; then
         local php_services
-        php_services=$(systemctl list-units --type=service | grep php.*fpm | awk '{print $1}')
+        php_services=$(systemctl list-units --type=service | grep 'php.*fpm' | awk '{print $1}')
 
         if [ -n "$php_services" ]; then
             while IFS= read -r service; do

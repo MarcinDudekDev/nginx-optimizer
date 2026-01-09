@@ -284,8 +284,10 @@ compare_benchmarks() {
     echo "Benchmark Comparison: $site"
     echo "═══════════════════════════════════════════════════════════"
 
-    local benchmarks
-    benchmarks=($(ls -t "${BENCHMARK_RESULTS_DIR}/${site}-"*.txt 2>/dev/null | head -2))
+    local -a benchmarks=()
+    while IFS= read -r file; do
+        benchmarks+=("$file")
+    done < <(ls -t "${BENCHMARK_RESULTS_DIR}/${site}-"*.txt 2>/dev/null | head -2)
 
     if [ ${#benchmarks[@]} -lt 2 ]; then
         log_info "Need at least 2 benchmarks to compare"
@@ -343,7 +345,8 @@ list_benchmarks() {
         return
     fi
 
-    for result in $(ls -t "$BENCHMARK_RESULTS_DIR"/*.txt 2>/dev/null); do
+    while IFS= read -r result; do
+        [ -f "$result" ] || continue
         local filename
         filename=$(basename "$result")
         local size
@@ -355,8 +358,7 @@ list_benchmarks() {
         echo "    Date: $date"
         echo "    Size: $size"
         echo ""
-    done
+    done < <(ls -t "$BENCHMARK_RESULTS_DIR"/*.txt 2>/dev/null)
 
     echo "═══════════════════════════════════════════════════════════"
 }
-
