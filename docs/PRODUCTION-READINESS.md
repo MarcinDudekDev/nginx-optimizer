@@ -539,17 +539,26 @@ After Path B: v1.0.0 (production ready)
 - [ ] APT/RPM packages - deferred
 - [ ] Ansible role - deferred
 
-### Future - Phase 6: Nice-to-Have
+### Completed - Phase 6 (2025-01-10)
+- [x] Per-site detection and analysis (scan sites-enabled/, conf.d/) ✅
+- [x] Interactive wizard with feature selection menu ✅
+- [x] Persistent interactive loop (stays open until q/exit) ✅
+- [x] WWW in SSL detection and auto-fix ✅
+- [x] HTTP/3 reuseport duplicate detection ✅
+- [x] Analysis caching (hash-based, skip if unchanged) ✅
+- [x] Batch feature extraction (33x faster analysis) ✅
+
+### Future - Phase 7: Nice-to-Have
 ```
-1. [ ] Per-site detection and analysis (scan sites-enabled/, conf.d/)
-2. [ ] Interactive wizard with feature selection menu
-3. [ ] Full JSON output (not placeholder)
-4. [ ] APT/RPM packages
-5. [ ] Ansible role
-6. [ ] Terraform provider
+1. [ ] Full JSON output (not placeholder)
+2. [ ] APT/RPM packages
+3. [ ] Ansible role/playbook
+4. [ ] Terraform provider
+5. [ ] Config AST parsing (awk-based or crossplane)
+6. [ ] Profile system (conservative/balanced/aggressive)
+7. [ ] Server sizing auto-detection (RAM/CPU → config values)
 ```
 
-### Known Issues (from testing on anna152)
-- Analyzer shows nginx instance but doesn't enumerate individual sites
-- Sites in /etc/nginx/sites-enabled/ not listed (7 sites exist but not shown)
-- Need to scan sites-enabled/ and conf.d/ directories for per-site analysis
+### Known Issues - RESOLVED (2025-01-10)
+- ~~Analyzer shows nginx instance but doesn't enumerate individual sites~~ ✅ FIXED
+- ~~Sites in /etc/nginx/sites-enabled/ not listed~~ ✅ FIXED (now scans per-site)
