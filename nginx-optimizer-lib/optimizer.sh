@@ -11,6 +11,22 @@ reset_applied_optimizations() {
     APPLIED_OPTIMIZATIONS=()
 }
 
+# Get human-readable display name for a feature
+get_feature_display_name() {
+    local feature="$1"
+    case "$feature" in
+        http3|quic) echo "HTTP/3 (QUIC)" ;;
+        fastcgi-cache|fastcgi|cache) echo "FastCGI Full-Page Cache" ;;
+        redis) echo "Redis Object Cache" ;;
+        brotli|compression) echo "Brotli Compression" ;;
+        security|headers) echo "Security Headers" ;;
+        wordpress|wp) echo "WordPress Exclusions" ;;
+        opcache|php) echo "PHP OpCache" ;;
+        www-ssl|www) echo "WWW + SSL Redirect" ;;
+        *) echo "$feature" ;;
+    esac
+}
+
 ################################################################################
 # Security: Path and File Validation
 ################################################################################
@@ -400,17 +416,61 @@ apply_optimizations() {
     # Reset tracking
     reset_applied_optimizations
 
+    # Show header if UI functions available
+    if type -t ui_header &>/dev/null; then
+        ui_header
+
+        if [ "$DRY_RUN" = true ]; then
+            ui_warn_box "DRY RUN MODE - No changes will be made"
+        fi
+        ui_blank
+    else
+        log_info "Applying optimizations..."
+        if [ "$DRY_RUN" = true ]; then
+            log_warn "DRY RUN MODE - Showing what would be done"
+        fi
+    fi
+
+    # Show target info
+    local site_count=0
+    if [ -n "$target_site" ]; then
+        site_count=1
+    elif [ -d "$WP_TEST_SITES" ]; then
+        site_count=$(find "$WP_TEST_SITES" -maxdepth 1 -type d ! -name "$(basename "$WP_TEST_SITES")" 2>/dev/null | wc -l | tr -d ' ')
+    fi
+
+    if type -t ui_context &>/dev/null; then
+        if [ -n "$specific_feature" ]; then
+            ui_context "Optimizing" "$(get_feature_display_name "$specific_feature")"
+        else
+            ui_context "Optimizing" "All features"
+        fi
+        ui_context "Target" "${target_site:-All sites} (${site_count} found)"
+    else
+        if [ -n "$target_site" ]; then
+            log_info "Target: ${target_site}"
+        else
+            log_info "Target: All sites"
+        fi
+    fi
+
+    # Preparation phase
+    if type -t ui_section &>/dev/null; then
+        ui_section "Preparing..."
+    fi
+
     # Purge cached templates to avoid stale config issues
-    purge_cached_templates
+    local purged_count
+    purged_count=$(purge_cached_templates 2>&1 | grep -oE '[0-9]+' | tail -1 || echo "0")
+    if type -t ui_step &>/dev/null; then
+        ui_step "Prerequisites satisfied"
+        if [ "${purged_count:-0}" -gt 0 ]; then
+            ui_step "Cached templates purged" "${purged_count} files"
+        fi
+    fi
 
     # Ensure templates exist if referenced by includes in sites-enabled
     ensure_referenced_templates
-
-    log_info "Applying optimizations..."
-
-    if [ "$DRY_RUN" = true ]; then
-        log_warn "DRY RUN MODE - Showing what would be done"
-    fi
 
     # Determine which features to apply
     local features=()
@@ -432,8 +492,17 @@ apply_optimizations() {
         fi
     fi
 
-    log_info "Features to apply: ${features[*]}"
-    echo ""
+    # Show features section
+    if type -t ui_section &>/dev/null; then
+        if [ -n "$specific_feature" ]; then
+            ui_section "Applying $(get_feature_display_name "$specific_feature")..."
+        else
+            ui_section "Applying optimizations..."
+        fi
+    else
+        log_info "Features to apply: ${features[*]}"
+        echo ""
+    fi
 
     # Apply each feature (with common aliases)
     for feature in "${features[@]}"; do
@@ -469,23 +538,40 @@ apply_optimizations() {
         esac
     done
 
-    echo ""
+    # Summary
     local applied_count=0
     if [ ${#APPLIED_OPTIMIZATIONS[@]} -gt 0 ] 2>/dev/null; then
         applied_count=${#APPLIED_OPTIMIZATIONS[@]}
     fi
-    log_info "Applied ${applied_count} optimization(s)"
 
-    # Show what was applied
-    if [ "$applied_count" -gt 0 ]; then
-        echo ""
-        echo "Applied Optimizations:"
+    ui_blank
+
+    if [ "$applied_count" -gt 0 ] && type -t ui_success_box &>/dev/null; then
+        # Build summary lines
+        local summary_lines=()
+        summary_lines+=("Applied ${applied_count} optimization(s):")
         for opt in "${APPLIED_OPTIMIZATIONS[@]}"; do
-            echo -e "  ${GREEN}✓${NC} $opt"
+            summary_lines+=("  ${UI_BULLET:-•} $opt")
         done
-    fi
+        summary_lines+=("")
+        # Shorten log path for display
+        local short_log="${LOG_FILE/#$HOME/~}"
+        summary_lines+=("Log: ${short_log}")
 
-    echo ""
+        ui_success_box "Optimization complete" "${summary_lines[@]}"
+    else
+        log_info "Applied ${applied_count} optimization(s)"
+
+        # Show what was applied
+        if [ "$applied_count" -gt 0 ]; then
+            echo ""
+            echo "Applied Optimizations:"
+            for opt in "${APPLIED_OPTIMIZATIONS[@]}"; do
+                echo -e "  ${GREEN}✓${NC} $opt"
+            done
+        fi
+        echo ""
+    fi
 }
 
 ################################################################################
@@ -709,12 +795,16 @@ apply_http3_system() {
 optimize_fastcgi_cache() {
     local target_site="$1"
 
-    log_info "Optimizing: FastCGI Full-Page Cache..."
+    # Log to file (detailed)
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Optimizing: FastCGI Full-Page Cache..." >> "${LOG_FILE:-/dev/null}"
 
     local template="${TEMPLATE_DIR}/fastcgi-cache.conf"
 
     if [ ! -f "$template" ]; then
         create_fastcgi_cache_template
+        if type -t ui_step_path &>/dev/null; then
+            ui_step_path "Created cache template" "fastcgi-cache.conf"
+        fi
     fi
 
     # Create cache directory
@@ -722,29 +812,43 @@ optimize_fastcgi_cache() {
 
     if [ ! -d "$cache_dir" ]; then
         if [ "$DRY_RUN" = false ]; then
-            log_info "Creating cache directory: $cache_dir"
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Creating cache directory: $cache_dir" >> "${LOG_FILE:-/dev/null}"
             sudo mkdir -p "$cache_dir" 2>/dev/null || mkdir -p "$HOME/.nginx-cache"
             sudo chown -R www-data:www-data "$cache_dir" 2>/dev/null || true
+            if type -t ui_step_path &>/dev/null; then
+                ui_step_path "Created cache directory" "$cache_dir"
+            fi
         else
-            log_info "[DRY RUN] Would create cache directory: $cache_dir"
+            if type -t ui_step_path &>/dev/null; then
+                ui_step_path "Would create cache dir" "$cache_dir"
+            fi
         fi
     fi
 
     # Apply to wp-test sites
+    local sites_updated=0
     if [ -n "$target_site" ] && [ -d "$WP_TEST_SITES/$target_site" ]; then
         apply_fastcgi_cache_wp_test "$target_site"
+        sites_updated=1
+        if type -t ui_step_path &>/dev/null; then
+            ui_step_path "Configured site" "$target_site"
+        fi
     elif [ -z "$target_site" ]; then
         for site_dir in "$WP_TEST_SITES"/*; do
             if [ -d "$site_dir" ]; then
                 local site
                 site=$(basename "$site_dir")
                 apply_fastcgi_cache_wp_test "$site"
+                ((sites_updated++))
+                if type -t ui_step_path &>/dev/null; then
+                    ui_step_path "Configured site" "$site"
+                fi
             fi
         done
     fi
 
     APPLIED_OPTIMIZATIONS+=("FastCGI Full-Page Cache")
-    log_success "FastCGI cache optimization complete"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUCCESS] FastCGI cache optimization complete" >> "${LOG_FILE:-/dev/null}"
 }
 
 create_fastcgi_cache_template() {
@@ -810,16 +914,18 @@ fastcgi_no_cache $skip_cache;
 add_header X-FastCGI-Cache $upstream_cache_status;
 EOF
 
-    log_info "Created FastCGI cache template"
+    # Log to file only (UI handled by parent)
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Created FastCGI cache template" >> "${LOG_FILE:-/dev/null}"
 }
 
 apply_fastcgi_cache_wp_test() {
     local site="$1"
 
-    log_info "Applying FastCGI cache to: $site"
+    # Log to file only (UI handled by parent function)
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Applying FastCGI cache to: $site" >> "${LOG_FILE:-/dev/null}"
 
     if [ "$DRY_RUN" = true ]; then
-        log_info "[DRY RUN] Would configure FastCGI cache for $site"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [DRY RUN] Would configure FastCGI cache for $site" >> "${LOG_FILE:-/dev/null}"
         return
     fi
 

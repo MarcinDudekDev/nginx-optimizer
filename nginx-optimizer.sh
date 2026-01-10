@@ -44,6 +44,7 @@ DRY_RUN=false
 # shellcheck disable=SC2034  # Used by sourced library files (compiler.sh, optimizer.sh)
 FORCE=false
 QUIET=false
+VERBOSE=false
 JSON_OUTPUT=false
 SHOW_VERSION=false
 NO_CACHE=false
@@ -173,7 +174,34 @@ check_prerequisites() {
     log_success "All prerequisites satisfied"
 }
 
+# Quiet version for clean UI mode
+check_prerequisites_quiet() {
+    local missing=()
+
+    for cmd in rsync curl jq; do
+        if ! command -v "$cmd" &>/dev/null; then
+            missing+=("$cmd")
+        fi
+    done
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo -e "  ${RED}Missing:${NC} ${missing[*]}"
+        echo -e "  Install: brew install ${missing[*]} (macOS) or apt install ${missing[*]} (Linux)"
+        exit 1
+    fi
+
+    # Log to file only
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Prerequisites OK" >> "${LOG_FILE}"
+}
+
 source_libraries() {
+    # Source UI library first (required for all output)
+    local ui_lib="${LIB_DIR}/ui.sh"
+    if [ -f "$ui_lib" ]; then
+        # shellcheck source=/dev/null
+        source "$ui_lib"
+    fi
+
     for lib in parser detector backup optimizer validator compiler docker monitoring benchmark honeypot; do
         lib_file="${LIB_DIR}/${lib}.sh"
         if [ -f "$lib_file" ]; then
@@ -215,6 +243,7 @@ OPTIONS:
     --dry-run                   Show what would be done without applying
     --force                     Skip confirmations
     -q, --quiet                 Suppress informational output (for scripting)
+    --verbose                   Show detailed technical output
     --json                      Output JSON (for status, list commands)
     --feature <name>            Apply specific feature only
     --exclude <name>            Exclude specific feature
@@ -319,19 +348,7 @@ cmd_analyze() {
 }
 
 cmd_optimize() {
-    log_info "Starting optimization process..."
-
-    if [ "$DRY_RUN" = true ]; then
-        log_warn "DRY RUN MODE - No changes will be made"
-    fi
-
-    if [ -n "$TARGET_SITE" ]; then
-        log_info "Target: ${TARGET_SITE}"
-    else
-        log_info "Target: All sites"
-    fi
-
-    # Create backup first
+    # Create backup first (before showing UI)
     if [ "$DRY_RUN" = false ]; then
         if type -t create_backup &>/dev/null; then
             create_backup "$TARGET_SITE"
@@ -341,7 +358,7 @@ cmd_optimize() {
         fi
     fi
 
-    # Apply optimizations
+    # Apply optimizations (handles all UI output)
     if type -t apply_optimizations &>/dev/null; then
         apply_optimizations "$TARGET_SITE" "$SPECIFIC_FEATURE" "$EXCLUDE_FEATURE"
     else
@@ -355,8 +372,6 @@ cmd_optimize() {
             validate_and_reload "$TARGET_SITE"
         fi
     fi
-
-    log_success "Optimization complete!"
 }
 
 cmd_rollback() {
@@ -672,6 +687,11 @@ parse_arguments() {
                 QUIET=true
                 shift
                 ;;
+            --verbose)
+                VERBOSE=true
+                export UI_VERBOSE=true
+                shift
+                ;;
             --json)
                 JSON_OUTPUT=true
                 QUIET=true  # JSON mode implies quiet
@@ -753,8 +773,8 @@ main() {
     acquire_lock
     trap release_lock EXIT
 
-    # Show banner unless quiet mode
-    if [ "$QUIET" = false ]; then
+    # Show banner only in verbose mode (new UI handles headers)
+    if [ "$VERBOSE" = true ] && [ "$QUIET" = false ]; then
         echo ""
         echo "╔════════════════════════════════════════════════════════════╗"
         echo "║          nginx-optimizer v${VERSION}                           ║"
@@ -762,8 +782,8 @@ main() {
         echo ""
     fi
 
-    # Check prerequisites and load libraries
-    check_prerequisites
+    # Check prerequisites and load libraries (quiet for clean UI)
+    check_prerequisites_quiet
     source_libraries
 
     # Execute command
@@ -816,9 +836,6 @@ main() {
             exit 1
             ;;
     esac
-
-    echo ""
-    log_info "Log file: ${LOG_FILE}"
 }
 
 # Run main function
