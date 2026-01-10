@@ -977,8 +977,24 @@ optimize_fastcgi_cache() {
 apply_fastcgi_cache_system() {
     local target_site="$1"
 
-    # Deploy template to conf.d
-    deploy_template_to_confd "fastcgi-cache.conf" || return 1
+    # Deploy zone config to conf.d (http context - auto-included by nginx.conf)
+    deploy_template_to_confd "fastcgi-cache-zone.conf" || return 1
+
+    # Deploy server config to snippets (included manually in server blocks)
+    if [ "$DRY_RUN" = true ]; then
+        ui_step_path "Would create" "snippets/fastcgi-cache.conf"
+    else
+        local src="${TEMPLATE_DIR}/fastcgi-cache.conf"
+        local dst="/etc/nginx/snippets/fastcgi-cache.conf"
+        if [ -f "$src" ]; then
+            if sudo cp "$src" "$dst" 2>/dev/null; then
+                ui_step_path "Created config" "snippets/fastcgi-cache.conf"
+            else
+                log_to_file "ERROR" "Failed to deploy fastcgi-cache.conf to snippets"
+                return 1
+            fi
+        fi
+    fi
 
     # Inject include into server blocks
     if [ "$DRY_RUN" = true ]; then
@@ -1034,7 +1050,7 @@ apply_fastcgi_cache_system() {
             if ($0 ~ /^[[:space:]]*#/) next
             # Inject after first server {
             if (!injected && $0 ~ /server[[:space:]]*\{/) {
-                print "    include /etc/nginx/conf.d/fastcgi-cache.conf;"
+                print "    include /etc/nginx/snippets/fastcgi-cache.conf;"
                 injected = 1
             }
         }' "$site_conf" > "$temp_file"
