@@ -8,16 +8,29 @@
 # - Color-coded status indicators
 ################################################################################
 
-# UI Characters (Unicode box drawing)
-UI_BOX_TL="┌"
-UI_BOX_TR="┐"
-UI_BOX_BL="└"
-UI_BOX_BR="┘"
-UI_BOX_H="─"
-UI_BOX_V="│"
-UI_CHECK="✓"
-UI_BULLET="•"
-UI_ARROW="→"
+# UI Characters - use ASCII fallback if locale doesn't support UTF-8
+if [[ "${LANG:-}" == *UTF-8* ]] || [[ "${LC_ALL:-}" == *UTF-8* ]]; then
+    UI_BOX_TL="┌"
+    UI_BOX_TR="┐"
+    UI_BOX_BL="└"
+    UI_BOX_BR="┘"
+    UI_BOX_H="─"
+    UI_BOX_V="│"
+    UI_CHECK="✓"
+    UI_BULLET="•"
+    UI_ARROW="->"
+else
+    # ASCII fallback
+    UI_BOX_TL="+"
+    UI_BOX_TR="+"
+    UI_BOX_BL="+"
+    UI_BOX_BR="+"
+    UI_BOX_H="-"
+    UI_BOX_V="|"
+    UI_CHECK="*"
+    UI_BULLET="*"
+    UI_ARROW="->"
+fi
 
 # UI Layout
 UI_WIDTH=55
@@ -135,18 +148,28 @@ _ui_box_line() {
 # Draw a generic box with content
 # Usage: ui_box "line1" "line2" ...
 ui_box() {
-    local color="${NC}"
     _ui_box_line "${UI_BOX_TL}" "${UI_BOX_TR}"
 
     for line in "$@"; do
         local text_len=${#line}
         local padding=$((UI_WIDTH - 4 - text_len))
         if (( padding < 0 )); then padding=0; fi
-        local pad_str=$(printf '%*s' "$padding" '')
+        local pad_str
+        pad_str=$(printf '%*s' "$padding" '')
         echo -e "${UI_INDENT}${UI_BOX_V}  ${line}${pad_str}${UI_BOX_V}"
     done
 
     _ui_box_line "${UI_BOX_BL}" "${UI_BOX_BR}"
+}
+
+# Helper to create horizontal line (tr doesn't work with UTF-8)
+_ui_hline() {
+    local width=$1
+    local line=""
+    for ((i=0; i<width; i++)); do
+        line+="${UI_BOX_H}"
+    done
+    echo "$line"
 }
 
 # Draw a warning box (yellow)
@@ -156,11 +179,14 @@ ui_warn_box() {
     local text_len=${#message}
     local padding=$((UI_WIDTH - 4 - text_len))
     if (( padding < 0 )); then padding=0; fi
-    local pad_str=$(printf '%*s' "$padding" '')
+    local pad_str
+    pad_str=$(printf '%*s' "$padding" '')
+    local hline
+    hline=$(_ui_hline $((UI_WIDTH-2)))
 
-    echo -e "${UI_INDENT}${YELLOW}${UI_BOX_TL}$(printf '%*s' $((UI_WIDTH-2)) '' | tr ' ' "${UI_BOX_H}")${UI_BOX_TR}${NC}"
+    echo -e "${UI_INDENT}${YELLOW}${UI_BOX_TL}${hline}${UI_BOX_TR}${NC}"
     echo -e "${UI_INDENT}${YELLOW}${UI_BOX_V}${NC}  ${YELLOW}${message}${NC}${pad_str}${YELLOW}${UI_BOX_V}${NC}"
-    echo -e "${UI_INDENT}${YELLOW}${UI_BOX_BL}$(printf '%*s' $((UI_WIDTH-2)) '' | tr ' ' "${UI_BOX_H}")${UI_BOX_BR}${NC}"
+    echo -e "${UI_INDENT}${YELLOW}${UI_BOX_BL}${hline}${UI_BOX_BR}${NC}"
 }
 
 # Draw a success box (green)
@@ -169,16 +195,19 @@ ui_success_box() {
     local title="$1"
     shift
     local lines=("$@")
+    local hline
+    hline=$(_ui_hline $((UI_WIDTH-2)))
 
     # Top border
-    echo -e "${UI_INDENT}${GREEN}${UI_BOX_TL}$(printf '%*s' $((UI_WIDTH-2)) '' | tr ' ' "${UI_BOX_H}")${UI_BOX_TR}${NC}"
+    echo -e "${UI_INDENT}${GREEN}${UI_BOX_TL}${hline}${UI_BOX_TR}${NC}"
 
     # Title with checkmark
     local title_with_check="${UI_CHECK} ${title}"
     local title_len=${#title_with_check}
     local padding=$((UI_WIDTH - 4 - title_len))
     if (( padding < 0 )); then padding=0; fi
-    local pad_str=$(printf '%*s' "$padding" '')
+    local pad_str
+    pad_str=$(printf '%*s' "$padding" '')
     echo -e "${UI_INDENT}${GREEN}${UI_BOX_V}${NC}  ${GREEN}${title_with_check}${NC}${pad_str}${GREEN}${UI_BOX_V}${NC}"
 
     # Empty line after title if there's content
@@ -191,12 +220,13 @@ ui_success_box() {
         local line_len=${#line}
         local line_padding=$((UI_WIDTH - 4 - line_len))
         if (( line_padding < 0 )); then line_padding=0; fi
-        local line_pad=$(printf '%*s' "$line_padding" '')
+        local line_pad
+        line_pad=$(printf '%*s' "$line_padding" '')
         echo -e "${UI_INDENT}${GREEN}${UI_BOX_V}${NC}  ${line}${line_pad}${GREEN}${UI_BOX_V}${NC}"
     done
 
     # Bottom border
-    echo -e "${UI_INDENT}${GREEN}${UI_BOX_BL}$(printf '%*s' $((UI_WIDTH-2)) '' | tr ' ' "${UI_BOX_H}")${UI_BOX_BR}${NC}"
+    echo -e "${UI_INDENT}${GREEN}${UI_BOX_BL}${hline}${UI_BOX_BR}${NC}"
 }
 
 # Draw an error box (red)
@@ -206,11 +236,14 @@ ui_error_box() {
     local text_len=${#message}
     local padding=$((UI_WIDTH - 4 - text_len))
     if (( padding < 0 )); then padding=0; fi
-    local pad_str=$(printf '%*s' "$padding" '')
+    local pad_str
+    pad_str=$(printf '%*s' "$padding" '')
+    local hline
+    hline=$(_ui_hline $((UI_WIDTH-2)))
 
-    echo -e "${UI_INDENT}${RED}${UI_BOX_TL}$(printf '%*s' $((UI_WIDTH-2)) '' | tr ' ' "${UI_BOX_H}")${UI_BOX_TR}${NC}"
+    echo -e "${UI_INDENT}${RED}${UI_BOX_TL}${hline}${UI_BOX_TR}${NC}"
     echo -e "${UI_INDENT}${RED}${UI_BOX_V}${NC}  ${RED}${message}${NC}${pad_str}${RED}${UI_BOX_V}${NC}"
-    echo -e "${UI_INDENT}${RED}${UI_BOX_BL}$(printf '%*s' $((UI_WIDTH-2)) '' | tr ' ' "${UI_BOX_H}")${UI_BOX_BR}${NC}"
+    echo -e "${UI_INDENT}${RED}${UI_BOX_BL}${hline}${UI_BOX_BR}${NC}"
 }
 
 ################################################################################

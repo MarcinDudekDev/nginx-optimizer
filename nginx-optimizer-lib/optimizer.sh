@@ -79,6 +79,129 @@ is_safe_config_file() {
 }
 
 ################################################################################
+# Environment Detection Helpers (DRY)
+################################################################################
+
+# Check if system nginx is installed and has sites-enabled
+has_system_nginx() {
+    [ -d "/etc/nginx/sites-enabled" ] && [ -n "$(ls -A /etc/nginx/sites-enabled 2>/dev/null)" ]
+}
+
+# Check if wp-test sites exist
+has_wptest_sites() {
+    [ -d "$WP_TEST_SITES" ] && [ -n "$(ls -A "$WP_TEST_SITES" 2>/dev/null)" ]
+}
+
+# Check if Docker wp-test proxy is running
+has_docker_wptest() {
+    command -v docker &>/dev/null && docker ps --format "{{.Names}}" 2>/dev/null | grep -q "wp-test-proxy"
+}
+
+# Get list of system nginx sites (basenames only)
+get_system_sites() {
+    if has_system_nginx; then
+        for f in /etc/nginx/sites-enabled/*; do
+            [ -f "$f" ] && basename "$f"
+        done
+    fi
+}
+
+# Get list of wp-test sites
+get_wptest_sites() {
+    if has_wptest_sites; then
+        for d in "$WP_TEST_SITES"/*; do
+            [ -d "$d" ] && basename "$d"
+        done
+    fi
+}
+
+################################################################################
+# Template Management Helpers (DRY)
+################################################################################
+
+# Ensure template exists, create if needed
+# Usage: ensure_template "feature.conf" create_function_name
+# Returns: 0 if template exists/created, 1 on failure
+ensure_template() {
+    local template_name="$1"
+    local create_func="$2"
+    local template_path="${TEMPLATE_DIR}/${template_name}"
+
+    if [ ! -f "$template_path" ]; then
+        if type -t "$create_func" &>/dev/null; then
+            "$create_func"
+            return $?
+        else
+            log_to_file "ERROR" "Template creator function not found: $create_func"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# Deploy template to /etc/nginx/conf.d/ (system nginx)
+# Usage: deploy_template_to_confd "feature.conf"
+deploy_template_to_confd() {
+    local template_name="$1"
+    local source="${TEMPLATE_DIR}/${template_name}"
+    local dest="/etc/nginx/conf.d/${template_name}"
+
+    if [ ! -f "$source" ]; then
+        log_to_file "ERROR" "Template not found: $source"
+        return 1
+    fi
+
+    if [ "$DRY_RUN" = true ]; then
+        ui_step_path "Would deploy template" "conf.d/${template_name}"
+        return 0
+    fi
+
+    if sudo cp "$source" "$dest" 2>/dev/null; then
+        ui_step_path "Deployed template" "conf.d/${template_name}"
+        log_to_file "SUCCESS" "Deployed $template_name to $dest"
+        return 0
+    else
+        log_to_file "ERROR" "Failed to deploy $template_name to $dest"
+        return 1
+    fi
+}
+
+# Deploy template to wp-test nginx conf.d
+# Usage: deploy_template_to_wptest "feature.conf"
+deploy_template_to_wptest() {
+    local template_name="$1"
+    local source="${TEMPLATE_DIR}/${template_name}"
+    local dest="${WP_TEST_NGINX}/conf.d/${template_name}"
+
+    if [ ! -f "$source" ]; then
+        return 1
+    fi
+
+    mkdir -p "$(dirname "$dest")" 2>/dev/null
+
+    if [ "$DRY_RUN" = true ]; then
+        ui_step_path "Would deploy template" "wp-test/conf.d/${template_name}"
+        return 0
+    fi
+
+    if cp "$source" "$dest" 2>/dev/null; then
+        ui_step_path "Deployed template" "wp-test/conf.d/${template_name}"
+        return 0
+    fi
+    return 1
+}
+
+################################################################################
+# Logging Helper (file-only, no terminal spam)
+################################################################################
+
+log_to_file() {
+    local level="$1"
+    shift
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [${level}] $*" >> "${LOG_FILE:-/dev/null}"
+}
+
+################################################################################
 # Atomic File Operations & Transaction Helpers
 ################################################################################
 
@@ -431,12 +554,21 @@ apply_optimizations() {
         fi
     fi
 
-    # Show target info
+    # Show target info - count sites from all sources
     local site_count=0
     if [ -n "$target_site" ]; then
         site_count=1
-    elif [ -d "$WP_TEST_SITES" ]; then
-        site_count=$(find "$WP_TEST_SITES" -maxdepth 1 -type d ! -name "$(basename "$WP_TEST_SITES")" 2>/dev/null | wc -l | tr -d ' ')
+    else
+        # Count wp-test sites
+        if [ -d "$WP_TEST_SITES" ]; then
+            site_count=$(find "$WP_TEST_SITES" -maxdepth 1 -type d ! -name "$(basename "$WP_TEST_SITES")" 2>/dev/null | wc -l | tr -d ' ')
+        fi
+        # Count system nginx sites
+        if [ -d "/etc/nginx/sites-enabled" ]; then
+            local sys_count
+            sys_count=$(find /etc/nginx/sites-enabled -maxdepth 1 -type f -o -type l 2>/dev/null | wc -l | tr -d ' ')
+            site_count=$((site_count + sys_count))
+        fi
     fi
 
     if type -t ui_context &>/dev/null; then
@@ -794,61 +926,151 @@ apply_http3_system() {
 
 optimize_fastcgi_cache() {
     local target_site="$1"
+    log_to_file "INFO" "Optimizing: FastCGI Full-Page Cache..."
 
-    # Log to file (detailed)
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Optimizing: FastCGI Full-Page Cache..." >> "${LOG_FILE:-/dev/null}"
-
-    local template="${TEMPLATE_DIR}/fastcgi-cache.conf"
-
-    if [ ! -f "$template" ]; then
-        create_fastcgi_cache_template
-        if type -t ui_step_path &>/dev/null; then
-            ui_step_path "Created cache template" "fastcgi-cache.conf"
-        fi
+    # 1. Ensure template exists
+    if ! ensure_template "fastcgi-cache.conf" create_fastcgi_cache_template; then
+        log_to_file "ERROR" "Failed to create FastCGI cache template"
+        return 1
     fi
+    ui_step_path "Template ready" "fastcgi-cache.conf"
 
-    # Create cache directory
+    # 2. Create cache directory (needed for both system and wp-test)
     local cache_dir="/var/run/nginx-cache"
-
     if [ ! -d "$cache_dir" ]; then
-        if [ "$DRY_RUN" = false ]; then
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Creating cache directory: $cache_dir" >> "${LOG_FILE:-/dev/null}"
-            sudo mkdir -p "$cache_dir" 2>/dev/null || mkdir -p "$HOME/.nginx-cache"
-            sudo chown -R www-data:www-data "$cache_dir" 2>/dev/null || true
-            if type -t ui_step_path &>/dev/null; then
-                ui_step_path "Created cache directory" "$cache_dir"
-            fi
+        if [ "$DRY_RUN" = true ]; then
+            ui_step_path "Would create cache dir" "$cache_dir"
         else
-            if type -t ui_step_path &>/dev/null; then
-                ui_step_path "Would create cache dir" "$cache_dir"
+            if sudo mkdir -p "$cache_dir" 2>/dev/null; then
+                sudo chown -R www-data:www-data "$cache_dir" 2>/dev/null || true
+                ui_step_path "Created cache directory" "$cache_dir"
+            else
+                # Fallback to home directory
+                mkdir -p "$HOME/.nginx-cache" 2>/dev/null
+                ui_step_path "Created cache directory" "\$HOME/.nginx-cache"
             fi
         fi
     fi
 
-    # Apply to wp-test sites
-    local sites_updated=0
+    local applied=false
+
+    # 3. Apply to system nginx (priority)
+    if has_system_nginx; then
+        apply_fastcgi_cache_system "$target_site"
+        applied=true
+    fi
+
+    # 4. Apply to wp-test sites
+    if has_wptest_sites; then
+        apply_fastcgi_cache_wptest "$target_site"
+        applied=true
+    fi
+
+    if [ "$applied" = true ]; then
+        APPLIED_OPTIMIZATIONS+=("FastCGI Full-Page Cache")
+    fi
+
+    log_to_file "SUCCESS" "FastCGI cache optimization complete"
+}
+
+# Apply FastCGI cache to system nginx sites
+apply_fastcgi_cache_system() {
+    local target_site="$1"
+
+    # Deploy template to conf.d
+    deploy_template_to_confd "fastcgi-cache.conf" || return 1
+
+    # Inject include into server blocks
+    if [ "$DRY_RUN" = true ]; then
+        ui_step_path "Would inject into" "sites-enabled/*"
+        # Count sites that would be affected
+        local count=0
+        for site_conf in /etc/nginx/sites-enabled/*; do
+            [ -f "$site_conf" ] || continue
+            if [ -n "$target_site" ] && [ "$(basename "$site_conf")" != "$target_site" ]; then
+                continue
+            fi
+            # Check if already has fastcgi_cache
+            if ! grep -q "fastcgi-cache.conf" "$site_conf" 2>/dev/null; then
+                ((count++))
+                ui_step_path "Would configure" "$(basename "$site_conf")"
+            fi
+        done
+        return 0
+    fi
+
+    # Actually inject the includes
+    local injected=0
+    for site_conf in /etc/nginx/sites-enabled/*; do
+        [ -f "$site_conf" ] || continue
+
+        # Filter by target site if specified
+        if [ -n "$target_site" ] && [ "$(basename "$site_conf")" != "$target_site" ]; then
+            continue
+        fi
+
+        # Skip if already configured
+        if grep -q "fastcgi-cache.conf" "$site_conf" 2>/dev/null; then
+            log_to_file "INFO" "Already configured: $(basename "$site_conf")"
+            continue
+        fi
+
+        # Skip if no PHP/FastCGI (not a PHP site)
+        if ! grep -q "fastcgi_pass" "$site_conf" 2>/dev/null; then
+            log_to_file "INFO" "No FastCGI config, skipping: $(basename "$site_conf")"
+            continue
+        fi
+
+        # Inject the include directive
+        local temp_file
+        temp_file=$(mktemp)
+
+        # Add include after server { line
+        awk '
+        BEGIN { injected = 0 }
+        {
+            print $0
+            # Skip commented lines
+            if ($0 ~ /^[[:space:]]*#/) next
+            # Inject after first server {
+            if (!injected && $0 ~ /server[[:space:]]*\{/) {
+                print "    include /etc/nginx/conf.d/fastcgi-cache.conf;"
+                injected = 1
+            }
+        }' "$site_conf" > "$temp_file"
+
+        if sudo cp "$temp_file" "$site_conf" 2>/dev/null; then
+            ui_step_path "Configured site" "$(basename "$site_conf")"
+            ((injected++))
+        else
+            log_to_file "ERROR" "Failed to configure: $(basename "$site_conf")"
+        fi
+        rm -f "$temp_file"
+    done
+
+    log_to_file "INFO" "Configured $injected system nginx site(s) for FastCGI cache"
+}
+
+# Apply FastCGI cache to wp-test sites (renamed for consistency)
+apply_fastcgi_cache_wptest() {
+    local target_site="$1"
+
+    # Deploy template to wp-test conf.d
+    deploy_template_to_wptest "fastcgi-cache.conf"
+
     if [ -n "$target_site" ] && [ -d "$WP_TEST_SITES/$target_site" ]; then
         apply_fastcgi_cache_wp_test "$target_site"
-        sites_updated=1
-        if type -t ui_step_path &>/dev/null; then
-            ui_step_path "Configured site" "$target_site"
-        fi
-    elif [ -z "$target_site" ]; then
+        ui_step_path "Configured site" "$target_site"
+    else
         for site_dir in "$WP_TEST_SITES"/*; do
             if [ -d "$site_dir" ]; then
                 local site
                 site=$(basename "$site_dir")
                 apply_fastcgi_cache_wp_test "$site"
-                ((sites_updated++))
-                if type -t ui_step_path &>/dev/null; then
-                    ui_step_path "Configured site" "$site"
-                fi
+                ui_step_path "Configured site" "$site"
             fi
         done
     fi
-
-    APPLIED_OPTIMIZATIONS+=("FastCGI Full-Page Cache")
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUCCESS] FastCGI cache optimization complete" >> "${LOG_FILE:-/dev/null}"
 }
 
 create_fastcgi_cache_template() {
@@ -1025,37 +1247,55 @@ networks:
 
 optimize_brotli() {
     local target_site="$1"
+    log_to_file "INFO" "Optimizing: Brotli + Zopfli Compression..."
 
-    log_info "Optimizing: Brotli + Zopfli Compression..."
-
-    # Check if Brotli module is available
+    # Early check: Brotli module required
     if ! check_brotli_module; then
-        log_warn "Brotli module not available"
+        if [ "$DRY_RUN" = true ]; then
+            ui_step_fail "Brotli module not available" "would need to compile nginx"
+            return 1
+        fi
 
+        ui_step_fail "Brotli module not available"
         if [ "$FORCE" = true ] || ask_yes_no "Compile nginx with Brotli module?"; then
             if type -t compile_nginx_with_brotli &>/dev/null; then
                 compile_nginx_with_brotli
             else
-                log_error "Compiler library not loaded"
+                log_to_file "ERROR" "Compiler library not loaded"
                 return 1
             fi
         else
-            log_info "Skipping Brotli optimization"
             return 1
         fi
+    else
+        ui_step "Brotli module available"
     fi
 
-    local template="${TEMPLATE_DIR}/compression.conf"
+    # Ensure template exists
+    if ! ensure_template "compression.conf" create_compression_template; then
+        return 1
+    fi
+    ui_step_path "Template ready" "compression.conf"
 
-    if [ ! -f "$template" ]; then
-        create_compression_template
+    local applied=false
+
+    # Apply to system nginx (global config, goes in conf.d)
+    if has_system_nginx; then
+        deploy_template_to_confd "compression.conf"
+        applied=true
     fi
 
-    # Apply compression config
-    apply_compression_config "$target_site"
+    # Apply to wp-test
+    if has_wptest_sites; then
+        deploy_template_to_wptest "compression.conf"
+        applied=true
+    fi
 
-    APPLIED_OPTIMIZATIONS+=("Brotli + Gzip Compression")
-    log_success "Compression optimization complete"
+    if [ "$applied" = true ]; then
+        APPLIED_OPTIMIZATIONS+=("Brotli + Gzip Compression")
+    fi
+
+    log_to_file "SUCCESS" "Compression optimization complete"
 }
 
 check_brotli_module() {
@@ -1100,51 +1340,114 @@ EOF
     log_info "Created compression template"
 }
 
-apply_compression_config() {
-    local target_site="$1"
-
-    log_info "Applying compression configuration..."
-
-    if [ "$DRY_RUN" = true ]; then
-        log_info "[DRY RUN] Would configure compression"
-        return
-    fi
-
-    # Apply to wp-test
-    if [ -d "$WP_TEST_NGINX" ]; then
-        cp "${TEMPLATE_DIR}/compression.conf" "${WP_TEST_NGINX}/conf.d/"
-        log_success "Compression configured for wp-test"
-    fi
-
-    # Apply to system nginx
-    if [ -f /etc/nginx/nginx.conf ]; then
-        local nginx_conf_d="/etc/nginx/conf.d"
-        if [ -d "$nginx_conf_d" ]; then
-            sudo cp "${TEMPLATE_DIR}/compression.conf" "$nginx_conf_d/" 2>/dev/null || true
-            log_success "Compression configured for system nginx"
-        fi
-    fi
-}
-
 ################################################################################
 # Security Headers & Rate Limiting
 ################################################################################
 
 optimize_security() {
     local target_site="$1"
+    log_to_file "INFO" "Optimizing: Security Headers & Rate Limiting..."
 
-    log_info "Optimizing: Security Headers & Rate Limiting..."
+    # Ensure templates exist
+    if ! ensure_template "security-headers.conf" create_security_template; then
+        return 1
+    fi
+    ui_step_path "Templates ready" "security-headers.conf"
 
-    local template="${TEMPLATE_DIR}/security-headers.conf"
+    local applied=false
 
-    if [ ! -f "$template" ]; then
-        create_security_template
+    # Apply to system nginx
+    if has_system_nginx; then
+        apply_security_system "$target_site"
+        applied=true
     fi
 
-    apply_security_config "$target_site"
+    # Apply to wp-test
+    if has_wptest_sites; then
+        apply_security_wptest "$target_site"
+        applied=true
+    fi
 
-    APPLIED_OPTIMIZATIONS+=("Security Headers & Rate Limiting")
-    log_success "Security optimization complete"
+    if [ "$applied" = true ]; then
+        APPLIED_OPTIMIZATIONS+=("Security Headers & Rate Limiting")
+    fi
+
+    log_to_file "SUCCESS" "Security optimization complete"
+}
+
+# Apply security to system nginx
+apply_security_system() {
+    local target_site="$1"
+
+    # Deploy rate limiting zones to conf.d (http context)
+    deploy_template_to_confd "security-http.conf"
+
+    if [ "$DRY_RUN" = true ]; then
+        ui_step_path "Would inject into" "sites-enabled/*"
+        return 0
+    fi
+
+    # Inject security headers into server blocks
+    log_to_file "INFO" "Injecting security headers into server blocks..."
+    if inject_server_includes "${TEMPLATE_DIR}/security-headers.conf" "security-headers.conf"; then
+        ui_step "Injected security headers into server blocks"
+    fi
+}
+
+# Apply security to wp-test
+apply_security_wptest() {
+    local target_site="$1"
+
+    if [ "$DRY_RUN" = true ]; then
+        ui_step_path "Would configure" "wp-test security"
+        return 0
+    fi
+
+    local vhost_dir="${WP_TEST_NGINX}/vhost.d"
+    local vhost_default="${vhost_dir}/default"
+    local consolidated_template="${TEMPLATE_DIR}/wp-test-vhost-default.conf"
+
+    mkdir -p "$vhost_dir"
+
+    # Deploy consolidated template to default
+    if [ -f "$consolidated_template" ]; then
+        cp "$consolidated_template" "$vhost_default"
+        ui_step_path "Deployed template" "vhost.d/default"
+    else
+        deploy_template_to_wptest "security-headers.conf"
+    fi
+
+    # Update site-specific files to include default
+    local updated=0
+    for site_file in "$vhost_dir"/*; do
+        [ -f "$site_file" ] || continue
+        local filename
+        filename=$(basename "$site_file")
+
+        # Skip default, default_location, and hidden files
+        [[ "$filename" == "default" ]] && continue
+        [[ "$filename" == "default_location" ]] && continue
+        [[ "$filename" == .* ]] && continue
+
+        # Check if already includes default
+        if grep -q "include.*/vhost.d/default" "$site_file" 2>/dev/null; then
+            continue
+        fi
+
+        # Add include directive at the beginning
+        local temp_file
+        temp_file=$(mktemp)
+        echo "# Include default security headers" > "$temp_file"
+        echo "include /etc/nginx/vhost.d/default;" >> "$temp_file"
+        echo "" >> "$temp_file"
+        cat "$site_file" >> "$temp_file"
+        mv "$temp_file" "$site_file"
+        ((updated++))
+    done
+
+    if [ "$updated" -gt 0 ]; then
+        ui_step "Updated $updated wp-test site(s) with security headers"
+    fi
 }
 
 create_security_template() {
@@ -1220,111 +1523,67 @@ EOF
     log_info "Created security headers templates (strict + legacy CSP)"
 }
 
-apply_security_config() {
-    local target_site="$1"
-
-    log_info "Applying security configuration..."
-
-    if [ "$DRY_RUN" = true ]; then
-        log_info "[DRY RUN] Would configure security headers"
-        return
-    fi
-
-    # Apply to wp-test - use consolidated vhost default template
-    # nginx-proxy includes EITHER site-specific OR default, not both
-    # So we: 1) Deploy default template, 2) Update site-specific files to include default
-    if [ -d "$WP_TEST_NGINX" ]; then
-        local vhost_dir="${WP_TEST_NGINX}/vhost.d"
-        local vhost_default="${vhost_dir}/default"
-        local consolidated_template="${TEMPLATE_DIR}/wp-test-vhost-default.conf"
-
-        mkdir -p "$vhost_dir"
-
-        # Deploy consolidated template to default
-        if [ -f "$consolidated_template" ]; then
-            cp "$consolidated_template" "$vhost_default"
-            log_success "Security template deployed to vhost.d/default"
-        else
-            log_warn "Consolidated template not found, using fallback"
-            cp "${TEMPLATE_DIR}/security-headers.conf" "${WP_TEST_NGINX}/conf.d/"
-        fi
-
-        # Update site-specific files to include default
-        # nginx-proxy uses site-specific file INSTEAD of default if it exists
-        local filename
-        local temp_file
-        for site_file in "$vhost_dir"/*; do
-            [ -f "$site_file" ] || continue
-            filename=$(basename "$site_file")
-
-            # Skip default, default_location, and hidden files
-            [[ "$filename" == "default" ]] && continue
-            [[ "$filename" == "default_location" ]] && continue
-            [[ "$filename" == .* ]] && continue
-            [[ -d "$site_file" ]] && continue
-
-            # Check if already includes default
-            if grep -q "include.*/vhost.d/default" "$site_file" 2>/dev/null; then
-                log_info "Site $filename already includes default"
-                continue
-            fi
-
-            # Add include directive at the beginning
-            log_info "Updating $filename to include default..."
-            temp_file=$(mktemp)
-            echo "# Include default security headers" > "$temp_file"
-            echo "include /etc/nginx/vhost.d/default;" >> "$temp_file"
-            echo "" >> "$temp_file"
-            cat "$site_file" >> "$temp_file"
-            mv "$temp_file" "$site_file"
-            log_success "Updated $filename"
-        done
-
-        log_success "Security configured for wp-test"
-    fi
-
-    # Apply to system nginx
-    if [ -f /etc/nginx/nginx.conf ]; then
-        # Deploy rate limiting zones to conf.d (http context)
-        local nginx_conf_d="/etc/nginx/conf.d"
-        if [ -d "$nginx_conf_d" ]; then
-            sudo cp "${TEMPLATE_DIR}/security-http.conf" "$nginx_conf_d/" 2>/dev/null || true
-            log_success "Rate limiting zones configured for system nginx"
-        fi
-
-        # Auto-inject security headers into server blocks
-        if [ -d "/etc/nginx/sites-enabled" ]; then
-            log_info "Auto-injecting security headers into server blocks..."
-            inject_server_includes "${TEMPLATE_DIR}/security-headers.conf" "security-headers.conf"
-        fi
-    fi
-}
-
 ################################################################################
 # WordPress Exclusions
 ################################################################################
 
 optimize_wordpress() {
     local target_site="$1"
+    log_to_file "INFO" "Optimizing: WordPress-Specific Exclusions..."
 
-    log_info "Optimizing: WordPress-Specific Exclusions..."
+    # Ensure template exists
+    if ! ensure_template "wordpress-exclusions.conf" create_wordpress_exclusions_template; then
+        return 1
+    fi
+    ui_step_path "Template ready" "wordpress-exclusions.conf"
 
-    local template="${TEMPLATE_DIR}/wordpress-exclusions.conf"
+    local applied=false
 
-    if [ ! -f "$template" ]; then
-        create_wordpress_exclusions_template
+    # Apply to system nginx
+    if has_system_nginx; then
+        apply_wordpress_system "$target_site"
+        applied=true
     fi
 
-    apply_wordpress_config "$target_site"
-
-    # Auto-detect WooCommerce
-    if detect_woocommerce "$target_site"; then
-        log_info "WooCommerce detected, applying specific rules..."
-        apply_woocommerce_rules "$target_site"
+    # Apply to wp-test
+    if has_wptest_sites; then
+        apply_wordpress_wptest "$target_site"
+        applied=true
     fi
 
-    APPLIED_OPTIMIZATIONS+=("WordPress Security Exclusions")
-    log_success "WordPress optimization complete"
+    # Auto-detect WooCommerce (wp-test only)
+    if has_wptest_sites && detect_woocommerce "$target_site"; then
+        ui_step "WooCommerce detected, rules included"
+    fi
+
+    if [ "$applied" = true ]; then
+        APPLIED_OPTIMIZATIONS+=("WordPress Security Exclusions")
+    fi
+
+    log_to_file "SUCCESS" "WordPress optimization complete"
+}
+
+# Apply WordPress exclusions to system nginx
+apply_wordpress_system() {
+    local target_site="$1"
+
+    if [ "$DRY_RUN" = true ]; then
+        ui_step_path "Would inject into" "sites-enabled/*"
+        return 0
+    fi
+
+    # Inject WordPress exclusions into server blocks
+    log_to_file "INFO" "Injecting WordPress exclusions into server blocks..."
+    if inject_server_includes "${TEMPLATE_DIR}/wordpress-exclusions.conf" "wordpress-exclusions.conf"; then
+        ui_step "Injected WordPress exclusions into server blocks"
+    fi
+}
+
+# Apply WordPress exclusions to wp-test
+apply_wordpress_wptest() {
+    local target_site="$1"
+
+    deploy_template_to_wptest "wordpress-exclusions.conf"
 }
 
 create_wordpress_exclusions_template() {
@@ -1372,35 +1631,6 @@ if ($request_method !~ ^(GET|POST|HEAD|PUT|DELETE|OPTIONS)$) {
 EOF
 
     log_info "Created WordPress exclusions template"
-}
-
-apply_wordpress_config() {
-    local target_site="$1"
-
-    log_info "Applying WordPress exclusions..."
-
-    if [ "$DRY_RUN" = true ]; then
-        log_info "[DRY RUN] Would configure WordPress exclusions"
-        return
-    fi
-
-    # Apply to wp-test (works because proxy handles server context)
-    if [ -d "$WP_TEST_NGINX" ]; then
-        cp "${TEMPLATE_DIR}/wordpress-exclusions.conf" "${WP_TEST_NGINX}/conf.d/"
-        log_success "WordPress exclusions configured for wp-test"
-    fi
-
-    # For system nginx: auto-inject into server blocks
-    if [ -f /etc/nginx/nginx.conf ]; then
-        if [ -d "/etc/nginx/sites-enabled" ]; then
-            log_info "Auto-injecting WordPress exclusions into server blocks..."
-            inject_server_includes "${TEMPLATE_DIR}/wordpress-exclusions.conf" "wordpress-exclusions.conf"
-        else
-            # Fallback to manual instructions if no sites-enabled
-            log_info "WordPress exclusions template created at: ${TEMPLATE_DIR}/wordpress-exclusions.conf"
-            log_info "Include this file in your server blocks: include ${TEMPLATE_DIR}/wordpress-exclusions.conf;"
-        fi
-    fi
 }
 
 detect_woocommerce() {
