@@ -225,7 +225,7 @@ source_libraries() {
         source "$ui_lib"
     fi
 
-    for lib in parser detector backup optimizer validator compiler docker monitoring benchmark honeypot; do
+    for lib in parser detector backup optimizer validator compiler docker monitoring benchmark honeypot warning-fixer; do
         lib_file="${LIB_DIR}/${lib}.sh"
         if [ -f "$lib_file" ]; then
             # shellcheck source=/dev/null
@@ -259,6 +259,7 @@ COMMANDS:
     honeypot <site>             Deploy honeypot tarpit for site (traps bots)
     honeypot-logs [hours]       Analyze honeypot logs (default: 24h)
     honeypot-export             Export attacker IPs for blocklists
+    fix-warnings                Detect and fix nginx config warnings
     update                      Self-update from git repository
     help                        Show this help message
 
@@ -693,7 +694,7 @@ parse_arguments() {
 
     while [ $# -gt 0 ]; do
         case "$1" in
-            analyze|optimize|compile|rollback|test|status|list|benchmark|help|update|honeypot|honeypot-logs|honeypot-export|honeypot-fail2ban)
+            analyze|optimize|compile|rollback|test|status|list|benchmark|help|update|honeypot|honeypot-logs|honeypot-export|honeypot-fail2ban|fix-warnings)
                 COMMAND="$1"
                 shift
                 ;;
@@ -856,6 +857,9 @@ main() {
             ;;
         honeypot-fail2ban)
             cmd_honeypot_fail2ban
+            ;;
+        fix-warnings)
+            cmd_fix_warnings
             ;;
         update)
             cmd_update
