@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## BEFORE PUSHING - MANDATORY
+
+**ALWAYS run shellcheck and fix issues before pushing:**
+```bash
+shellcheck --severity=warning nginx-optimizer.sh nginx-optimizer-lib/*.sh
+```
+A pre-push hook enforces this, but run manually to catch issues early.
+
 ## Project Overview
 
 nginx-optimizer is a bash-based CLI tool for optimizing nginx configurations. It supports HTTP/3, FastCGI caching, Redis, Brotli compression, security headers, and WordPress-specific optimizations. Works with system nginx, Docker containers, and wp-test environments.
