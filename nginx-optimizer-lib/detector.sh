@@ -4,10 +4,11 @@
 # detector.sh - Nginx Detection & Configuration Analysis
 ################################################################################
 
-# Nginx location patterns
+# Nginx location patterns (system, Intel Homebrew, Apple Silicon Homebrew)
 NGINX_LOCATIONS=(
     "/etc/nginx/nginx.conf"
     "/usr/local/etc/nginx/nginx.conf"
+    "/opt/homebrew/etc/nginx/nginx.conf"
     "/opt/nginx/conf/nginx.conf"
     "/usr/local/nginx/conf/nginx.conf"
 )
@@ -17,6 +18,10 @@ SITE_CONFIGS=(
     "/etc/nginx/sites-enabled/"
     "/etc/nginx/conf.d/"
     "/usr/local/etc/nginx/servers/"
+    "/usr/local/etc/nginx/sites-enabled/"
+    "/opt/homebrew/etc/nginx/servers/"
+    "/opt/homebrew/etc/nginx/sites-enabled/"
+    "/opt/homebrew/etc/nginx/conf.d/"
 )
 
 # wp-test locations
@@ -398,14 +403,17 @@ build_site_filter_cache() {
     fi
 
     # FAST: Use awk instead of slow bash while-read
+    # Note: BSD/macOS awk doesn't support match() with third argument
     SITE_FILTER_CACHE=$(awk '
     BEGIN { main_conf = "" }
     /^###FILE:/ || /^#.*configuration file [^:]+:$/ {
         if (/^###FILE:/) {
             current_file = substr($0, 9)
         } else {
-            match($0, /configuration file ([^:]+):/, arr)
-            if (arr[1]) current_file = arr[1]
+            # BSD-compatible: extract path between "configuration file " and ":"
+            gsub(/^.*configuration file /, "")
+            gsub(/:$/, "")
+            current_file = $0
         }
         if (current_file ~ /nginx\.conf$/ && main_conf == "") main_conf = current_file
         next
@@ -1526,7 +1534,7 @@ show_recommendations() {
         local menu_output
         menu_output=$(display_recommendations_menu)
         # Print menu without the count line (last line is rec_count)
-        echo "$menu_output" | head -n -1
+        echo "$menu_output" | sed '$d'
         echo ""
         echo -e "  ${CYAN}0.${NC} Apply ALL recommendations"
         echo "═══════════════════════════════════════════════════════════"
@@ -1540,7 +1548,7 @@ show_recommendations() {
         menu_output=$(display_recommendations_menu)
         local rec_count
         rec_count=$(echo "$menu_output" | tail -1)
-        echo "$menu_output" | head -n -1  # Print menu without the count line
+        echo "$menu_output" | sed '$d'  # Print menu without the count line
 
         if [ "$rec_count" -eq 0 ] 2>/dev/null; then
             echo ""

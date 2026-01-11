@@ -4,7 +4,12 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:www.nginx.com)",
       "WebSearch",
-      "WebFetch(domain:clig.dev)"
+      "WebFetch(domain:clig.dev)",
+      "Bash(nginx -t:*)",
+      "Bash(for f in /opt/homebrew/etc/nginx/sites-available/*.conf)",
+      "Bash(do sed -i '' 's|/etc/ssl/certs/|/opt/homebrew/etc/nginx/ssl/|g; s|/etc/ssl/private/|/opt/homebrew/etc/nginx/ssl/|g' \"$f\")",
+      "Bash(done)",
+      "Bash(./nginx-optimizer.sh:*)"
     ]
   }
 }
