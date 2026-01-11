@@ -314,8 +314,12 @@ detect_nginx_instances() {
     else
         # Detect all (ignore return codes - we accumulate instances)
         detect_system_nginx || true
-        detect_docker_nginx || true
-        detect_wp_test_sites || true
+        if [ "${SYSTEM_ONLY:-false}" != true ]; then
+            detect_docker_nginx || true
+            detect_wp_test_sites || true
+        else
+            log_info "Skipping wp-test (--system-only mode)"
+        fi
     fi
 
     echo ""

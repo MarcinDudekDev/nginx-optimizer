@@ -129,7 +129,7 @@ feature_apply_custom_opcache() {
 
 # Ensure OpCache template exists
 _opcache_ensure_template() {
-    local template_dir="${TEMPLATE_DIR:-/Users/cminds/Tools/nginx-optimizer/nginx-optimizer-templates}"
+    local template_dir="${TEMPLATE_DIR:-nginx-optimizer-templates}"
     local template="${template_dir}/opcache.ini"
 
     if [ -f "$template" ]; then
@@ -177,7 +177,7 @@ EOF
 
 # Deploy OpCache configuration to PHP config directory
 _opcache_deploy_config() {
-    local template_dir="${TEMPLATE_DIR:-/Users/cminds/Tools/nginx-optimizer/nginx-optimizer-templates}"
+    local template_dir="${TEMPLATE_DIR:-nginx-optimizer-templates}"
     local template="${template_dir}/opcache.ini"
 
     if [ "${DRY_RUN:-false}" = true ]; then

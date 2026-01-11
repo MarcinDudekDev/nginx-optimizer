@@ -40,9 +40,12 @@ validate_nginx_config_path() {
     # Must resolve successfully
     [[ -z "$resolved" ]] && return 1
 
-    # Must be within allowed directories
+    # Must be within allowed directories (includes Homebrew paths and sites-available)
     case "$resolved" in
-        /etc/nginx/*|/usr/local/etc/nginx/*|"$HOME"/.wp-test/*) return 0 ;;
+        /etc/nginx/*) return 0 ;;
+        /usr/local/etc/nginx/*) return 0 ;;
+        /opt/homebrew/etc/nginx/*) return 0 ;;
+        "$HOME"/.wp-test/*) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -83,8 +86,58 @@ is_safe_config_file() {
 ################################################################################
 
 # Check if system nginx is installed and has sites-enabled
+# Supports Linux, Homebrew Intel, and Homebrew Apple Silicon
 has_system_nginx() {
-    [ -d "/etc/nginx/sites-enabled" ] && [ -n "$(ls -A /etc/nginx/sites-enabled 2>/dev/null)" ]
+    local sites_dir
+    sites_dir=$(get_nginx_sites_dir)
+    local check1=$( [ -n "$sites_dir" ] && echo 1 || echo 0 )
+    local check2=$( [ -d "$sites_dir" ] && echo 1 || echo 0 )
+    local check3=$( [ -n "$(ls -A "$sites_dir" 2>/dev/null)" ] && echo 1 || echo 0 )
+    # Debug output to log
+    if type -t log_to_file &>/dev/null; then
+        log_to_file "DEBUG" "has_system_nginx: dir=$sites_dir check1=$check1 check2=$check2 check3=$check3"
+    fi
+    [ -n "$sites_dir" ] && [ -d "$sites_dir" ] && [ -n "$(ls -A "$sites_dir" 2>/dev/null)" ]
+}
+
+# Get the nginx sites-enabled directory (cross-platform)
+get_nginx_sites_dir() {
+    for dir in /etc/nginx/sites-enabled /usr/local/etc/nginx/sites-enabled /opt/homebrew/etc/nginx/sites-enabled; do
+        if [ -d "$dir" ]; then
+            echo "$dir"
+            return 0
+        fi
+    done
+    # Fallback to servers/ on Homebrew
+    for dir in /usr/local/etc/nginx/servers /opt/homebrew/etc/nginx/servers; do
+        if [ -d "$dir" ]; then
+            echo "$dir"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Get the nginx conf.d directory (cross-platform)
+get_nginx_confd_dir() {
+    for dir in /etc/nginx/conf.d /usr/local/etc/nginx/conf.d /opt/homebrew/etc/nginx/conf.d; do
+        if [ -d "$dir" ]; then
+            echo "$dir"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Get the nginx snippets directory (cross-platform)
+get_nginx_snippets_dir() {
+    for dir in /etc/nginx/snippets /usr/local/etc/nginx/snippets /opt/homebrew/etc/nginx/snippets; do
+        if [ -d "$dir" ]; then
+            echo "$dir"
+            return 0
+        fi
+    done
+    return 1
 }
 
 # Check if wp-test sites exist
@@ -97,12 +150,16 @@ has_docker_wptest() {
     command -v docker &>/dev/null && docker ps --format "{{.Names}}" 2>/dev/null | grep -q "wp-test-proxy"
 }
 
-# Get list of system nginx sites (basenames only)
+# Get list of system nginx sites (basenames only, cross-platform)
 get_system_sites() {
     if has_system_nginx; then
-        for f in /etc/nginx/sites-enabled/*; do
-            [ -f "$f" ] && basename "$f"
-        done
+        local sites_dir
+        sites_dir=$(get_nginx_sites_dir)
+        if [ -n "$sites_dir" ] && [ -d "$sites_dir" ]; then
+            for f in "$sites_dir"/*; do
+                [ -f "$f" ] && basename "$f"
+            done
+        fi
     fi
 }
 
@@ -139,12 +196,21 @@ ensure_template() {
     return 0
 }
 
-# Deploy template to /etc/nginx/conf.d/ (system nginx)
+# Deploy template to nginx conf.d (cross-platform)
 # Usage: deploy_template_to_confd "feature.conf"
 deploy_template_to_confd() {
     local template_name="$1"
     local source="${TEMPLATE_DIR}/${template_name}"
-    local dest="/etc/nginx/conf.d/${template_name}"
+
+    # Get cross-platform conf.d path
+    local confd_dir
+    confd_dir=$(get_nginx_confd_dir)
+    if [ -z "$confd_dir" ]; then
+        log_to_file "ERROR" "Cannot find nginx conf.d directory"
+        return 1
+    fi
+
+    local dest="${confd_dir}/${template_name}"
 
     if [ ! -f "$source" ]; then
         log_to_file "ERROR" "Template not found: $source"
@@ -156,14 +222,32 @@ deploy_template_to_confd() {
         return 0
     fi
 
-    if sudo cp "$source" "$dest" 2>/dev/null; then
-        ui_step_path "Deployed template" "conf.d/${template_name}"
-        log_to_file "SUCCESS" "Deployed $template_name to $dest"
-        return 0
-    else
-        log_to_file "ERROR" "Failed to deploy $template_name to $dest"
-        return 1
+    # Ensure conf.d exists
+    if [ ! -d "$confd_dir" ]; then
+        if [ -w "$(dirname "$confd_dir")" ]; then
+            mkdir -p "$confd_dir"
+        else
+            sudo mkdir -p "$confd_dir"
+        fi
     fi
+
+    # Smart sudo: only use if directory not writable
+    if [ -w "$confd_dir" ]; then
+        if cp "$source" "$dest" 2>/dev/null; then
+            ui_step_path "Deployed template" "conf.d/${template_name}"
+            log_to_file "SUCCESS" "Deployed $template_name to $dest"
+            return 0
+        fi
+    else
+        if sudo cp "$source" "$dest" 2>/dev/null; then
+            ui_step_path "Deployed template" "conf.d/${template_name}"
+            log_to_file "SUCCESS" "Deployed $template_name to $dest"
+            return 0
+        fi
+    fi
+
+    log_to_file "ERROR" "Failed to deploy $template_name to $dest"
+    return 1
 }
 
 # Deploy template to wp-test nginx conf.d
@@ -397,10 +481,12 @@ transaction_rollback() {
         return 0
     fi
 
-    # Delete all temp files
-    for temp in "${TRANSACTION_TEMPS[@]}"; do
-        rm -f "$temp"
-    done
+    # Delete all temp files (check if array has elements)
+    if [ "${#TRANSACTION_TEMPS[@]}" -gt 0 ]; then
+        for temp in "${TRANSACTION_TEMPS[@]}"; do
+            rm -f "$temp"
+        done
+    fi
 
     # Clear transaction state
     TRANSACTION_FILES=()
@@ -415,50 +501,28 @@ transaction_rollback() {
 ################################################################################
 
 purge_cached_templates() {
-    log_info "Purging cached templates to ensure fresh configuration..."
+    # NOTE: This function is disabled during optimization because deleting
+    # templates before applying them makes no sense. Templates are now
+    # managed by the feature modules themselves.
+    #
+    # Previously this would delete security-headers.conf etc. right before
+    # the security feature tried to use them, causing failures.
 
-    # List of dynamically generated templates that should be refreshed
-    local templates=(
-        "compression.conf"
-        "security-headers.conf"
-        "security-http.conf"
-        "fastcgi-cache.conf"
-        "http3-quic.conf"
-        "wordpress-exclusions.conf"
-        "opcache.ini"
-    )
-
-    local purged=0
-    for template in "${templates[@]}"; do
-        local template_path="${TEMPLATE_DIR}/${template}"
-        if [ -f "$template_path" ]; then
-            # Don't purge if template is referenced by includes in sites-enabled
-            if [ -d "/etc/nginx/sites-enabled" ]; then
-                if grep -rq "include.*${template}" /etc/nginx/sites-enabled/ 2>/dev/null; then
-                    log_info "Keeping $template (in use by sites-enabled)"
-                    continue
-                fi
-            fi
-            rm -f "$template_path"
-            purged=$((purged + 1))
-        fi
-    done
-
-    if [ $purged -gt 0 ]; then
-        log_info "Purged $purged cached template(s)"
-    else
-        log_info "No cached templates to purge"
-    fi
+    log_to_file "INFO" "Template purge skipped (managed by feature modules)"
+    return 0
 }
 
 ensure_referenced_templates() {
     # If includes exist in sites-enabled but templates don't, recreate them
-    if [ ! -d "/etc/nginx/sites-enabled" ]; then
+    local sites_dir
+    sites_dir=$(get_nginx_sites_dir 2>/dev/null)
+
+    if [ -z "$sites_dir" ] || [ ! -d "$sites_dir" ]; then
         return
     fi
 
     # Check for security-headers.conf references
-    if grep -rq "include.*security-headers.conf" /etc/nginx/sites-enabled/ 2>/dev/null; then
+    if grep -rq "include.*security-headers.conf" "$sites_dir"/ 2>/dev/null; then
         if [ ! -f "${TEMPLATE_DIR}/security-headers.conf" ]; then
             log_info "Recreating security-headers.conf (referenced by includes)"
             create_security_template
@@ -466,7 +530,7 @@ ensure_referenced_templates() {
     fi
 
     # Check for wordpress-exclusions.conf references
-    if grep -rq "include.*wordpress-exclusions.conf" /etc/nginx/sites-enabled/ 2>/dev/null; then
+    if grep -rq "include.*wordpress-exclusions.conf" "$sites_dir"/ 2>/dev/null; then
         if [ ! -f "${TEMPLATE_DIR}/wordpress-exclusions.conf" ]; then
             log_info "Recreating wordpress-exclusions.conf (referenced by includes)"
             create_wordpress_exclusions_template
@@ -481,10 +545,12 @@ ensure_referenced_templates() {
 inject_server_includes() {
     local include_file="$1"
     local include_name="$2"
-    local sites_dir="/etc/nginx/sites-enabled"
+    local sites_dir
 
-    if [ ! -d "$sites_dir" ]; then
-        log_warn "No sites-enabled directory found at $sites_dir"
+    # Cross-platform sites directory detection
+    sites_dir=$(get_nginx_sites_dir)
+    if [ -z "$sites_dir" ] || [ ! -d "$sites_dir" ]; then
+        log_warn "No sites-enabled directory found"
         return 1
     fi
 
@@ -506,6 +572,12 @@ inject_server_includes() {
             continue
         fi
 
+        # Skip if site already has inline protection (avoid duplicate location blocks)
+        if [[ "$include_name" == *"wordpress"* ]] && grep -qE "location[[:space:]]*=[[:space:]]*/xmlrpc\.php" "$site_conf" 2>/dev/null; then
+            log_info "Already has xmlrpc protection: $(basename "$site_conf")"
+            continue
+        fi
+
         # SECURITY FIX: Check if file contains UNCOMMENTED server block
         # Skip commented lines to prevent injection into comments
         if ! grep -vE '^[[:space:]]*#' "$site_conf" 2>/dev/null | grep -q "server[[:space:]]*{"; then
@@ -513,7 +585,10 @@ inject_server_includes() {
             continue
         fi
 
-        files_to_modify+=("$site_conf")
+        # Resolve symlinks to get actual file path
+        local real_path
+        real_path=$(realpath "$site_conf" 2>/dev/null) || real_path="$site_conf"
+        files_to_modify+=("$real_path")
     done
 
     if [ ${#files_to_modify[@]} -eq 0 ]; then
@@ -526,13 +601,13 @@ inject_server_includes() {
 
     local -a temp_files=()
     for site_conf in "${files_to_modify[@]}"; do
-        # Add to transaction
+        # Add to transaction (files_to_modify now contains resolved paths)
         local temp_file
         temp_file=$(transaction_add_file "$site_conf")
         temp_files+=("$temp_file")
 
-        # SECURITY FIX: Use awk to inject after first UNCOMMENTED server block
-        # This prevents injection into commented sections
+        # Inject after "listen 443 ssl" to target SSL server blocks
+        # This ensures includes go into HTTPS blocks, not HTTP redirect blocks
         awk -v include_line="    include ${include_file};" '
         BEGIN { injected = 0 }
         {
@@ -542,8 +617,8 @@ inject_server_includes() {
             # Skip commented lines
             if (line ~ /^[[:space:]]*#/) next
 
-            # Inject after first uncommented "server {"
-            if (!injected && line ~ /server[[:space:]]*\{/) {
+            # Inject after first "listen 443 ssl" (targets SSL blocks)
+            if (!injected && line ~ /listen[[:space:]]+443[[:space:]]+ssl/) {
                 print include_line
                 injected = 1
             }
@@ -554,30 +629,68 @@ inject_server_includes() {
     # Phase 3: Validate with nginx -t (if possible)
     # First commit to temp location for testing
     local validation_failed=false
+
+    # Determine if we need sudo (check if first file is writable)
+    local use_sudo=false
+    if [ -n "${files_to_modify[0]}" ] && [ ! -w "${files_to_modify[0]}" ]; then
+        use_sudo=true
+    fi
+
     if command -v nginx &>/dev/null && [ -n "${files_to_modify[0]}" ]; then
+        # Create backup directory outside sites-enabled (nginx would include .txn-backup files!)
+        local backup_dir
+        backup_dir=$(mktemp -d)
+
         # Create backup copies for validation test
+        local -a backup_files=()
         for ((i=0; i<${#files_to_modify[@]}; i++)); do
             local original="${files_to_modify[$i]}"
             local temp="${temp_files[$i]}"
-            sudo cp "$original" "${original}.txn-backup" 2>/dev/null || true
-            sudo cp "$temp" "$original" 2>/dev/null || true
+            local backup_file="${backup_dir}/$(basename "$original")"
+            backup_files+=("$backup_file")
+
+            if [ "$use_sudo" = true ]; then
+                sudo cp "$original" "$backup_file" 2>/dev/null || true
+                sudo cp "$temp" "$original" 2>/dev/null || true
+            else
+                cp "$original" "$backup_file" 2>/dev/null || true
+                cp "$temp" "$original" 2>/dev/null || true
+            fi
         done
 
-        # Test nginx config
-        if ! sudo nginx -t 2>&1 | grep -q "test is successful"; then
+        # Test nginx config (check exit code, not output)
+        if nginx -t 2>/dev/null; then
+            # Validation passed - restore backups (we'll commit properly below)
+            for ((i=0; i<${#files_to_modify[@]}; i++)); do
+                local original="${files_to_modify[$i]}"
+                local backup_file="${backup_files[$i]}"
+                if [ "$use_sudo" = true ]; then
+                    sudo cp "$backup_file" "$original" 2>/dev/null || true
+                else
+                    cp "$backup_file" "$original" 2>/dev/null || true
+                fi
+            done
+        else
+            local nginx_test_output
+            nginx_test_output=$(nginx -t 2>&1)
             log_error "nginx -t validation failed, rolling back changes"
+            log_to_file "DEBUG" "nginx -t output: $nginx_test_output"
             validation_failed=true
 
             # Restore backups
-            for original in "${files_to_modify[@]}"; do
-                sudo mv "${original}.txn-backup" "$original" 2>/dev/null || true
-            done
-        else
-            # Restore backups (we'll commit properly below)
-            for original in "${files_to_modify[@]}"; do
-                sudo mv "${original}.txn-backup" "$original" 2>/dev/null || true
+            for ((i=0; i<${#files_to_modify[@]}; i++)); do
+                local original="${files_to_modify[$i]}"
+                local backup_file="${backup_files[$i]}"
+                if [ "$use_sudo" = true ]; then
+                    sudo cp "$backup_file" "$original" 2>/dev/null || true
+                else
+                    cp "$backup_file" "$original" 2>/dev/null || true
+                fi
             done
         fi
+
+        # Cleanup backup directory
+        rm -rf "$backup_dir"
     fi
 
     # Phase 4: Commit or rollback
@@ -592,12 +705,21 @@ inject_server_includes() {
         local original="${files_to_modify[$i]}"
         local temp="${temp_files[$i]}"
 
-        # Atomic move with sudo if needed
-        if sudo mv "$temp" "$original" 2>/dev/null; then
-            log_success "Injected into: $(basename "$original")"
-            injected=$((injected + 1))
+        # Atomic move (try without sudo first)
+        if [ "$use_sudo" = true ]; then
+            if sudo mv "$temp" "$original" 2>/dev/null; then
+                log_success "Injected into: $(basename "$original")"
+                injected=$((injected + 1))
+            else
+                log_error "Failed to commit: $(basename "$original")"
+            fi
         else
-            log_error "Failed to commit: $(basename "$original")"
+            if mv "$temp" "$original" 2>/dev/null; then
+                log_success "Injected into: $(basename "$original")"
+                injected=$((injected + 1))
+            else
+                log_error "Failed to commit: $(basename "$original")"
+            fi
         fi
     done
 
@@ -642,14 +764,18 @@ apply_optimizations() {
     if [ -n "$target_site" ]; then
         site_count=1
     else
-        # Count wp-test sites
-        if [ -d "$WP_TEST_SITES" ]; then
+        # Count wp-test sites (skip if --system-only)
+        if [ "${SYSTEM_ONLY:-false}" != true ] && [ -d "$WP_TEST_SITES" ]; then
             site_count=$(find "$WP_TEST_SITES" -maxdepth 1 -type d ! -name "$(basename "$WP_TEST_SITES")" 2>/dev/null | wc -l | tr -d ' ')
         fi
-        # Count system nginx sites
-        if [ -d "/etc/nginx/sites-enabled" ]; then
+        # Count system nginx sites (cross-platform)
+        local sites_dir
+        if type -t get_nginx_sites_dir &>/dev/null; then
+            sites_dir=$(get_nginx_sites_dir)
+        fi
+        if [ -n "$sites_dir" ] && [ -d "$sites_dir" ]; then
             local sys_count
-            sys_count=$(find /etc/nginx/sites-enabled -maxdepth 1 -type f -o -type l 2>/dev/null | wc -l | tr -d ' ')
+            sys_count=$(find "$sites_dir" -maxdepth 1 -type f -o -type l 2>/dev/null | wc -l | tr -d ' ')
             site_count=$((site_count + sys_count))
         fi
     fi

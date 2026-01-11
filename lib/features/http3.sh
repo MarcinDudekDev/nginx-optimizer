@@ -62,13 +62,19 @@ feature_apply_custom_http3() {
     fi
 
     # For system nginx, need to inject listen directives
-    if [ -d "/etc/nginx/sites-enabled" ]; then
-        _http3_inject_system_nginx "$target_site"
+    local sites_dir
+    if type -t get_nginx_sites_dir &>/dev/null; then
+        sites_dir=$(get_nginx_sites_dir)
+    fi
+    if [ -n "$sites_dir" ] && [ -d "$sites_dir" ]; then
+        _http3_inject_system_nginx "$target_site" "$sites_dir"
     fi
 
-    # For wp-test, configure vhost
-    if type -t has_wptest_sites &>/dev/null && has_wptest_sites; then
-        _http3_configure_wptest "$target_site"
+    # For wp-test, configure vhost (skip if --system-only)
+    if [ "${SYSTEM_ONLY:-false}" != true ]; then
+        if type -t has_wptest_sites &>/dev/null && has_wptest_sites; then
+            _http3_configure_wptest "$target_site"
+        fi
     fi
 
     return 0
@@ -104,15 +110,16 @@ _version_gte() {
 # Inject HTTP/3 into system nginx sites
 _http3_inject_system_nginx() {
     local target_site="$1"
+    local sites_dir="${2:-/etc/nginx/sites-enabled}"
 
     # Check if reuseport already configured globally
     local reuseport_exists=false
-    if grep -r "quic.*reuseport\|reuseport.*quic" /etc/nginx/sites-enabled/ 2>/dev/null | grep -qv '^\s*#'; then
+    if grep -r "quic.*reuseport\|reuseport.*quic" "$sites_dir"/ 2>/dev/null | grep -qv '^\s*#'; then
         reuseport_exists=true
     fi
 
     local first_site=true
-    for site_conf in /etc/nginx/sites-enabled/*; do
+    for site_conf in "$sites_dir"/*; do
         [ -f "$site_conf" ] || continue
 
         # Filter by target if specified
@@ -150,9 +157,16 @@ _http3_inject_system_nginx() {
 
         # Backup and inject
         local backup="${site_conf}.http3bak"
-        sudo cp "$site_conf" "$backup"
 
-        sudo awk -v quic="$quic_directive" -v quic_v6="$quic_directive_v6" '
+        # Smart sudo: only use if file not writable
+        local use_sudo=""
+        if [ ! -w "$site_conf" ]; then
+            use_sudo="sudo"
+        fi
+
+        $use_sudo cp "$site_conf" "$backup"
+
+        awk -v quic="$quic_directive" -v quic_v6="$quic_directive_v6" '
         {
             line = $0
             print line
@@ -164,17 +178,17 @@ _http3_inject_system_nginx() {
             else if (line ~ /listen[[:space:]]+\[::\]:443[[:space:]]+ssl/) {
                 print "    " quic_v6
             }
-        }' "$site_conf" | sudo tee "${site_conf}.tmp" > /dev/null
+        }' "$site_conf" > "${site_conf}.tmp"
 
-        sudo mv "${site_conf}.tmp" "$site_conf"
+        $use_sudo mv "${site_conf}.tmp" "$site_conf"
 
         # Validate
         if nginx -t 2>&1 | grep -q "test failed\|emerg"; then
-            sudo mv "$backup" "$site_conf"
+            $use_sudo mv "$backup" "$site_conf"
             continue
         fi
 
-        sudo rm -f "$backup"
+        $use_sudo rm -f "$backup"
         if type -t ui_step_path &>/dev/null; then
             ui_step_path "Configured HTTP/3" "$(basename "$site_conf")"
         fi

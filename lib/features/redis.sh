@@ -31,31 +31,28 @@ FEATURE_HAS_CUSTOM_APPLY="1"
 # Custom Detection
 ################################################################################
 
-# Detect if Redis is configured by checking docker-compose.yml
-# Args: $1 = config_file (unused for Redis), $2 = site_name
+# Detect if Redis is configured
+# Args: $1 = config_file, $2 = site_name (optional for wp-test)
 # Returns: 0 if enabled, 1 if not
 # Sets: LAST_DIRECTIVE_SOURCE
 feature_detect_custom_redis() {
     local config_file="$1"
-    local site_name="$2"
+    local site_name="${2:-}"
 
-    # Redis is wp-test specific, needs site name
-    if [ -z "$site_name" ]; then
-        return 1
-    fi
-
-    local wp_test_sites="${WP_TEST_SITES:-$HOME/.wp-test/sites}"
-    local site_dir="${wp_test_sites}/${site_name}"
-    local compose_file="${site_dir}/docker-compose.yml"
-
-    if [ ! -f "$compose_file" ]; then
-        return 1
-    fi
-
-    # Check for redis service in docker-compose.yml
-    if grep -q "redis:" "$compose_file" 2>/dev/null; then
-        LAST_DIRECTIVE_SOURCE="$compose_file"
+    # Check 1: System Redis - is redis-server running?
+    if command -v redis-cli &>/dev/null && redis-cli ping &>/dev/null 2>&1; then
+        LAST_DIRECTIVE_SOURCE="system (redis-server running)"
         return 0
+    fi
+
+    # Check 2: wp-test Docker - redis service in docker-compose.yml
+    if [[ -n "$site_name" ]]; then
+        local wp_test_sites="${WP_TEST_SITES:-$HOME/.wp-test/sites}"
+        local compose_file="${wp_test_sites}/${site_name}/docker-compose.yml"
+        if [[ -f "$compose_file" ]] && grep -q "redis:" "$compose_file" 2>/dev/null; then
+            LAST_DIRECTIVE_SOURCE="$compose_file"
+            return 0
+        fi
     fi
 
     return 1
@@ -65,44 +62,45 @@ feature_detect_custom_redis() {
 # Custom Apply
 ################################################################################
 
-# Apply Redis configuration by adding redis service to docker-compose.yml
+# Apply Redis configuration
+# For system nginx: install Redis, configure PHP sessions
+# For wp-test: add redis service to docker-compose.yml
 # Args: $1 = target_site (optional)
 # Returns: 0 on success, 1 on failure
 feature_apply_custom_redis() {
     local target_site="${1:-}"
 
-    # Check prerequisites
-    if ! command -v docker &>/dev/null; then
-        if type -t log_warn &>/dev/null; then
-            log_warn "Docker not installed, skipping Redis setup"
-        fi
-        return 1
-    fi
-
-    local wp_test_sites="${WP_TEST_SITES:-$HOME/.wp-test/sites}"
-
-    if [ ! -d "$wp_test_sites" ]; then
-        if type -t log_warn &>/dev/null; then
-            log_warn "wp-test sites directory not found"
-        fi
-        return 1
-    fi
-
     if type -t log_to_file &>/dev/null; then
         log_to_file "INFO" "Applying Redis Object Cache..."
     fi
 
-    # Apply to specific site or all sites
-    if [ -n "$target_site" ] && [ -d "$wp_test_sites/$target_site" ]; then
-        _redis_apply_site "$target_site"
-    elif [ -z "$target_site" ]; then
-        for site_dir in "$wp_test_sites"/*; do
-            if [ -d "$site_dir" ]; then
-                local site
-                site=$(basename "$site_dir")
-                _redis_apply_site "$site"
+    # System nginx mode
+    if [ "${SYSTEM_ONLY:-false}" = true ]; then
+        _redis_apply_system
+        return $?
+    fi
+
+    # wp-test mode (Docker)
+    if command -v docker &>/dev/null; then
+        local wp_test_sites="${WP_TEST_SITES:-$HOME/.wp-test/sites}"
+        if [ -d "$wp_test_sites" ]; then
+            if [ -n "$target_site" ] && [ -d "$wp_test_sites/$target_site" ]; then
+                _redis_apply_site "$target_site"
+            elif [ -z "$target_site" ]; then
+                for site_dir in "$wp_test_sites"/*; do
+                    if [ -d "$site_dir" ]; then
+                        local site
+                        site=$(basename "$site_dir")
+                        _redis_apply_site "$site"
+                    fi
+                done
             fi
-        done
+        fi
+    fi
+
+    # Also apply system Redis if available
+    if type -t has_system_nginx &>/dev/null && has_system_nginx; then
+        _redis_apply_system
     fi
 
     if type -t log_to_file &>/dev/null; then
@@ -110,6 +108,71 @@ feature_apply_custom_redis() {
     fi
 
     return 0
+}
+
+# Apply Redis for system nginx
+_redis_apply_system() {
+    # Check if Redis is already running
+    if command -v redis-cli &>/dev/null && redis-cli ping &>/dev/null 2>&1; then
+        if type -t ui_step &>/dev/null; then
+            ui_step "Redis server already running"
+        fi
+        _redis_system_show_wp_config
+        return 0
+    fi
+
+    # Try to install Redis
+    if [ "${DRY_RUN:-false}" = true ]; then
+        if type -t ui_step_path &>/dev/null; then
+            ui_step_path "Would install" "Redis server"
+        fi
+        return 0
+    fi
+
+    # macOS with Homebrew
+    if command -v brew &>/dev/null; then
+        if ! brew list redis &>/dev/null 2>&1; then
+            if type -t ui_step &>/dev/null; then
+                ui_step "Installing Redis via Homebrew..."
+            fi
+            brew install redis 2>/dev/null
+        fi
+        # Start Redis service
+        brew services start redis 2>/dev/null
+        if type -t ui_step &>/dev/null; then
+            ui_step "Redis service started"
+        fi
+    # Linux with apt
+    elif command -v apt-get &>/dev/null; then
+        if ! command -v redis-server &>/dev/null; then
+            if type -t ui_step &>/dev/null; then
+                ui_step "Installing Redis..."
+            fi
+            sudo apt-get update && sudo apt-get install -y redis-server 2>/dev/null
+        fi
+        sudo systemctl enable redis-server 2>/dev/null
+        sudo systemctl start redis-server 2>/dev/null
+    else
+        if type -t log_warn &>/dev/null; then
+            log_warn "Cannot auto-install Redis. Please install manually."
+        fi
+        return 1
+    fi
+
+    _redis_system_show_wp_config
+    return 0
+}
+
+# Show WordPress configuration for system Redis
+_redis_system_show_wp_config() {
+    if type -t log_to_file &>/dev/null; then
+        log_to_file "INFO" "WordPress Redis Object Cache setup:"
+        log_to_file "INFO" "  1. Install 'Redis Object Cache' plugin"
+        log_to_file "INFO" "  2. Add to wp-config.php:"
+        log_to_file "INFO" "     define('WP_REDIS_HOST', '127.0.0.1');"
+        log_to_file "INFO" "     define('WP_REDIS_PORT', 6379);"
+        log_to_file "INFO" "  3. Enable in Settings > Redis"
+    fi
 }
 
 ################################################################################

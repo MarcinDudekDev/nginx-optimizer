@@ -230,8 +230,19 @@ template_deploy() {
 ################################################################################
 
 # Check if system nginx with sites-enabled exists
+# Uses cross-platform path detection via get_nginx_sites_dir() from optimizer.sh
 has_system_nginx() {
-    [ -d "/etc/nginx/sites-enabled" ] && [ -n "$(ls -A /etc/nginx/sites-enabled 2>/dev/null)" ]
+    if type -t get_nginx_sites_dir &>/dev/null; then
+        local sites_dir
+        sites_dir=$(get_nginx_sites_dir)
+        [ -n "$sites_dir" ] && [ -d "$sites_dir" ] && [ -n "$(ls -A "$sites_dir" 2>/dev/null)" ]
+    else
+        # Fallback: check standard locations
+        for dir in /etc/nginx/sites-enabled /usr/local/etc/nginx/sites-enabled /opt/homebrew/etc/nginx/sites-enabled; do
+            [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ] && return 0
+        done
+        return 1
+    fi
 }
 
 # Check if wp-test sites exist

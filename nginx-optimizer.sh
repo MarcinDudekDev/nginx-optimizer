@@ -55,6 +55,7 @@ EXCLUDE_FEATURE=""
 # shellcheck disable=SC2034  # Used by sourced library files (backup.sh)
 CUSTOM_BACKUP_DIR=""
 TARGET_SITE=""
+SYSTEM_ONLY=false
 
 # Allowed feature names for --feature flag
 ALLOWED_FEATURES=(
@@ -300,6 +301,7 @@ OPTIONS:
     --feature <name>            Apply specific feature only
     --exclude <name>            Exclude specific feature
     --backup-dir <path>         Custom backup directory
+    --system-only               Only operate on system nginx (skip wp-test)
     -v, --version               Show version
 
 FEATURES:
@@ -788,6 +790,11 @@ parse_arguments() {
                 # shellcheck disable=SC2034  # Used by sourced library files
                 CUSTOM_BACKUP_DIR="$2"
                 shift 2
+                ;;
+            --system-only)
+                SYSTEM_ONLY=true
+                export SYSTEM_ONLY
+                shift
                 ;;
             -v|--version)
                 SHOW_VERSION=true

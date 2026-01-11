@@ -47,16 +47,18 @@ feature_apply_custom_wordpress() {
         _wordpress_apply_system "$target_site"
     fi
 
-    # Apply to wp-test
-    if type -t has_wptest_sites &>/dev/null && has_wptest_sites; then
-        _wordpress_apply_wptest "$target_site"
-    fi
+    # Apply to wp-test (skip if --system-only)
+    if [ "${SYSTEM_ONLY:-false}" != true ]; then
+        if type -t has_wptest_sites &>/dev/null && has_wptest_sites; then
+            _wordpress_apply_wptest "$target_site"
+        fi
 
-    # Auto-detect WooCommerce (wp-test only)
-    if type -t has_wptest_sites &>/dev/null && has_wptest_sites; then
-        if type -t detect_woocommerce &>/dev/null && detect_woocommerce "$target_site"; then
-            if type -t ui_step &>/dev/null; then
-                ui_step "WooCommerce detected, rules included"
+        # Auto-detect WooCommerce (wp-test only)
+        if type -t has_wptest_sites &>/dev/null && has_wptest_sites; then
+            if type -t detect_woocommerce &>/dev/null && detect_woocommerce "$target_site"; then
+                if type -t ui_step &>/dev/null; then
+                    ui_step "WooCommerce detected, rules included"
+                fi
             fi
         fi
     fi

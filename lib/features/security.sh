@@ -50,9 +50,11 @@ feature_apply_custom_security() {
         _security_apply_system "$target_site"
     fi
 
-    # Apply to wp-test
-    if type -t has_wptest_sites &>/dev/null && has_wptest_sites; then
-        _security_apply_wptest "$target_site"
+    # Apply to wp-test (skip if --system-only)
+    if [ "${SYSTEM_ONLY:-false}" != true ]; then
+        if type -t has_wptest_sites &>/dev/null && has_wptest_sites; then
+            _security_apply_wptest "$target_site"
+        fi
     fi
 
     return 0

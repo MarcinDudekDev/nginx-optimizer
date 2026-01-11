@@ -63,13 +63,15 @@ feature_register() {
         return 1
     fi
 
-    # Determine custom function flags
+    # Determine custom function flags (normalize hyphens to underscores for function names)
     local has_custom_detect=0
     local has_custom_apply=0
-    if declare -f "feature_detect_custom_${FEATURE_ID}" &>/dev/null; then
+    local func_id
+    func_id=$(_normalize_id_for_func "$FEATURE_ID")
+    if declare -f "feature_detect_custom_${func_id}" &>/dev/null; then
         has_custom_detect=1
     fi
-    if declare -f "feature_apply_custom_${FEATURE_ID}" &>/dev/null; then
+    if declare -f "feature_apply_custom_${func_id}" &>/dev/null; then
         has_custom_apply=1
     fi
 
@@ -246,10 +248,12 @@ feature_detect() {
     local has_custom_detect
     has_custom_detect=$(_get_field "$entry" "$FIELD_CUSTOM_DETECT")
 
-    # Use custom detection if available
+    # Use custom detection if available (normalize hyphens to underscores)
     if [[ "$has_custom_detect" == "1" ]]; then
-        if declare -f "feature_detect_custom_${id}" &>/dev/null; then
-            "feature_detect_custom_${id}" "$config_file" "$site_name"
+        local func_id
+        func_id=$(_normalize_id_for_func "$id")
+        if declare -f "feature_detect_custom_${func_id}" &>/dev/null; then
+            "feature_detect_custom_${func_id}" "$config_file" "$site_name"
             return $?
         fi
     fi
@@ -261,6 +265,20 @@ feature_detect() {
     if [[ -f "$config_file" ]] && grep -qE "$pattern" "$config_file" 2>/dev/null; then
         LAST_DIRECTIVE_SOURCE="$config_file"
         return 0
+    fi
+
+    # Also check for include directives with our template names
+    local template_names
+    template_names=$(_get_field "$entry" "$FIELD_TEMPLATE")
+    if [[ -n "$template_names" ]]; then
+        # Split comma-separated template names and check for includes
+        local IFS=','
+        for tmpl in $template_names; do
+            if grep -qE "include.*${tmpl}" "$config_file" 2>/dev/null; then
+                LAST_DIRECTIVE_SOURCE="$config_file (via include)"
+                return 0
+            fi
+        done
     fi
 
     return 1
@@ -286,10 +304,12 @@ feature_apply() {
     local has_custom_apply
     has_custom_apply=$(_get_field "$entry" "$FIELD_CUSTOM_APPLY")
 
-    # Use custom application if available
+    # Use custom application if available (normalize hyphens to underscores)
     if [[ "$has_custom_apply" == "1" ]]; then
-        if declare -f "feature_apply_custom_${id}" &>/dev/null; then
-            "feature_apply_custom_${id}" "$target_site"
+        local func_id
+        func_id=$(_normalize_id_for_func "$id")
+        if declare -f "feature_apply_custom_${func_id}" &>/dev/null; then
+            "feature_apply_custom_${func_id}" "$target_site"
             return $?
         fi
     fi
@@ -321,6 +341,13 @@ _get_field() {
     local entry="$1"
     local field_idx="$2"
     echo "$entry" | cut -d';' -f"$field_idx"
+}
+
+# Helper: Normalize feature ID for function names (hyphens to underscores)
+# Args: $1 = feature_id
+# Prints: normalized ID safe for use in function names
+_normalize_id_for_func() {
+    echo "${1//-/_}"
 }
 
 # Helper: Find feature entry by ID
