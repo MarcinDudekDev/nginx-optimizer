@@ -1314,6 +1314,117 @@ check_www_ssl_mismatch() {
 # Per-Site Analysis Functions
 ################################################################################
 
+################################################################################
+# Registry-Based Detection
+################################################################################
+
+# Detect all registered features for a site
+# Args: $1 = site_name, $2 = config_file
+# Sets: DETECT_SCORE_ENABLED, DETECT_SCORE_TOTAL
+# Returns: 0 on success
+detect_all_features_for_site() {
+    local site_name="$1"
+    local config_file="$2"
+
+    DETECT_SCORE_ENABLED=0
+    DETECT_SCORE_TOTAL=0
+
+    # Check if registry is available
+    if ! type -t feature_list_all &>/dev/null; then
+        return 1
+    fi
+
+    # Loop through all registered features
+    local feature_line
+    while IFS='|' read -r feature_id feature_display; do
+        [ -z "$feature_id" ] && continue
+
+        # Check if this feature affects scoring
+        local counts_for_score=true
+        case "$feature_id" in
+            ocsp|tls*) counts_for_score=false ;;
+        esac
+
+        # Detect the feature
+        if feature_detect "$feature_id" "$config_file" "$site_name"; then
+            # Feature is enabled
+            printf "    ${GREEN}✓${NC} %-22s" "$feature_display"
+            if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
+                echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
+            else
+                echo ""
+            fi
+
+            if [ "$counts_for_score" = true ]; then
+                DETECT_SCORE_ENABLED=$((DETECT_SCORE_ENABLED + 1))
+            fi
+        else
+            # Feature is missing
+            printf "    ${YELLOW}✗${NC} %-22s\n" "$feature_display"
+            record_missing_feature "$feature_id" "$site_name"
+        fi
+
+        if [ "$counts_for_score" = true ]; then
+            DETECT_SCORE_TOTAL=$((DETECT_SCORE_TOTAL + 1))
+        fi
+    done <<< "$(feature_list_all)"
+
+    # Handle features not yet in registry
+    # Gzip - can be global
+    if check_feature_for_site "gzip on" "$site_name" "$config_file"; then
+        printf "    ${GREEN}✓${NC} %-22s" "Gzip Compression"
+        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
+            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
+        else
+            echo ""
+        fi
+        DETECT_SCORE_ENABLED=$((DETECT_SCORE_ENABLED + 1))
+    else
+        printf "    ${YELLOW}✗${NC} %-22s\n" "Gzip Compression"
+        record_missing_feature "gzip" "$site_name"
+    fi
+    DETECT_SCORE_TOTAL=$((DETECT_SCORE_TOTAL + 1))
+
+    # TLS Versions - special display format (no score)
+    local tls_versions=""
+    if check_feature_for_site "TLSv1.3" "$site_name" "$config_file"; then
+        tls_versions="1.3"
+    fi
+    if check_feature_for_site "TLSv1.2" "$site_name" "$config_file"; then
+        if [ -n "$tls_versions" ]; then
+            tls_versions="${tls_versions}, 1.2"
+        else
+            tls_versions="1.2"
+        fi
+    fi
+
+    if [ -n "$tls_versions" ]; then
+        if echo "$tls_versions" | grep -q "1.3"; then
+            printf "    ${GREEN}✓${NC} %-22s" "TLS Versions: ${tls_versions}"
+            if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
+                echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
+            else
+                echo ""
+            fi
+        else
+            echo -e "    ${YELLOW}✓ TLS Versions: ${tls_versions} (1.3 recommended)${NC}"
+        fi
+    else
+        echo -e "    ${YELLOW}✗ TLS Versions: not configured${NC}"
+    fi
+
+    # WWW/SSL Mismatch check (only for non-www sites with SSL)
+    if check_www_ssl_mismatch "$config_file" "$site_name"; then
+        # Either no www handling needed, or www is properly configured
+        :
+    else
+        printf "    ${YELLOW}✗${NC} %-22s\n" "WWW in SSL"
+        record_missing_feature "www-ssl" "$site_name"
+    fi
+
+    return 0
+}
+
 # Map regex pattern to feature name for fast cache lookup
 pattern_to_feature() {
     local pattern="$1"
@@ -1422,10 +1533,6 @@ analyze_single_site() {
     local site_name="$1"
     local config_file="$2"
 
-    # Reset score for this site
-    local site_score_enabled=0
-    local site_score_total=0
-
     echo ""
     echo "═══════════════════════════════════════════════════════════"
     echo "Site: $site_name ($(format_source_path "$config_file"))"
@@ -1434,165 +1541,13 @@ analyze_single_site() {
     # Initialize site filtering for this specific site
     init_site_filtering "$site_name"
 
-    # HTTP/3 QUIC - per-site (check in site's server block)
-    if check_feature_for_site "listen.*quic" "$site_name" "$config_file"; then
-        printf "    ${GREEN}✓${NC} %-22s" "HTTP/3 QUIC"
-        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
-            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
-        else
-            echo ""
-        fi
-        site_score_enabled=$((site_score_enabled + 1))
-    else
-        printf "    ${YELLOW}✗${NC} %-22s\n" "HTTP/3 QUIC"
-        record_missing_feature "http3" "$site_name"
-    fi
-    site_score_total=$((site_score_total + 1))
-
-    # FastCGI Cache - per-site
-    if check_feature_for_site "fastcgi_cache" "$site_name" "$config_file"; then
-        printf "    ${GREEN}✓${NC} %-22s" "FastCGI Cache"
-        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
-            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
-        else
-            echo ""
-        fi
-        site_score_enabled=$((site_score_enabled + 1))
-    else
-        printf "    ${YELLOW}✗${NC} %-22s\n" "FastCGI Cache"
-        record_missing_feature "fastcgi-cache" "$site_name"
-    fi
-    site_score_total=$((site_score_total + 1))
-
-    # Brotli - can be global
-    if check_feature_for_site "brotli on" "$site_name" "$config_file"; then
-        printf "    ${GREEN}✓${NC} %-22s" "Brotli Compression"
-        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
-            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
-        else
-            echo ""
-        fi
-        site_score_enabled=$((site_score_enabled + 1))
-    else
-        printf "    ${YELLOW}✗${NC} %-22s\n" "Brotli Compression"
-        record_missing_feature "brotli" "$site_name"
-    fi
-    site_score_total=$((site_score_total + 1))
-
-    # Gzip - can be global
-    if check_feature_for_site "gzip on" "$site_name" "$config_file"; then
-        printf "    ${GREEN}✓${NC} %-22s" "Gzip Compression"
-        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
-            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
-        else
-            echo ""
-        fi
-        site_score_enabled=$((site_score_enabled + 1))
-    else
-        printf "    ${YELLOW}✗${NC} %-22s\n" "Gzip Compression"
-        record_missing_feature "gzip" "$site_name"
-    fi
-    site_score_total=$((site_score_total + 1))
-
-    # Security Headers - per-site
-    if check_feature_for_site "Strict-Transport-Security" "$site_name" "$config_file"; then
-        printf "    ${GREEN}✓${NC} %-22s" "Security Headers"
-        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
-            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
-        else
-            echo ""
-        fi
-        site_score_enabled=$((site_score_enabled + 1))
-    else
-        printf "    ${YELLOW}✗${NC} %-22s\n" "Security Headers"
-        record_missing_feature "security" "$site_name"
-    fi
-    site_score_total=$((site_score_total + 1))
-
-    # Rate Limiting - per-site
-    if check_feature_for_site "limit_req" "$site_name" "$config_file"; then
-        printf "    ${GREEN}✓${NC} %-22s" "Rate Limiting"
-        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
-            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
-        else
-            echo ""
-        fi
-        site_score_enabled=$((site_score_enabled + 1))
-    else
-        printf "    ${YELLOW}✗${NC} %-22s\n" "Rate Limiting"
-        record_missing_feature "rate-limiting" "$site_name"
-    fi
-    site_score_total=$((site_score_total + 1))
-
-    # WordPress Exclusions - per-site
-    if check_feature_for_site "xmlrpc" "$site_name" "$config_file"; then
-        printf "    ${GREEN}✓${NC} %-22s" "WordPress Exclusions"
-        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
-            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
-        else
-            echo ""
-        fi
-        site_score_enabled=$((site_score_enabled + 1))
-    else
-        printf "    ${YELLOW}✗${NC} %-22s\n" "WordPress Exclusions"
-        record_missing_feature "wordpress" "$site_name"
-    fi
-    site_score_total=$((site_score_total + 1))
-
-    # OCSP Stapling - per-site (no score)
-    if check_feature_for_site "ssl_stapling on" "$site_name" "$config_file"; then
-        printf "    ${GREEN}✓${NC} %-22s" "OCSP Stapling"
-        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
-            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
-        else
-            echo ""
-        fi
-    else
-        printf "    ${YELLOW}✗${NC} %-22s\n" "OCSP Stapling"
-        record_missing_feature "ocsp" "$site_name"
-    fi
-
-    # TLS Versions - per-site (no score)
-    local tls_versions=""
-    if check_feature_for_site "TLSv1.3" "$site_name" "$config_file"; then
-        tls_versions="1.3"
-    fi
-    if check_feature_for_site "TLSv1.2" "$site_name" "$config_file"; then
-        if [ -n "$tls_versions" ]; then
-            tls_versions="${tls_versions}, 1.2"
-        else
-            tls_versions="1.2"
-        fi
-    fi
-
-    if [ -n "$tls_versions" ]; then
-        if echo "$tls_versions" | grep -q "1.3"; then
-            printf "    ${GREEN}✓${NC} %-22s" "TLS Versions: ${tls_versions}"
-            if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
-                echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
-            else
-                echo ""
-            fi
-        else
-            echo -e "    ${YELLOW}✓ TLS Versions: ${tls_versions} (1.3 recommended)${NC}"
-        fi
-    else
-        echo -e "    ${YELLOW}✗ TLS Versions: not configured${NC}"
-    fi
-
-    # WWW/SSL Mismatch check (only for non-www sites with SSL)
-    if check_www_ssl_mismatch "$config_file" "$site_name"; then
-        # Either no www handling needed, or www is properly configured
-        :
-    else
-        printf "    ${YELLOW}✗${NC} %-22s\n" "WWW in SSL"
-        record_missing_feature "www-ssl" "$site_name"
-    fi
+    # Use registry-based detection for all registered features
+    detect_all_features_for_site "$site_name" "$config_file"
 
     # Show site score
     echo ""
     printf "    Score: "
-    show_site_score "$site_score_enabled" "$site_score_total"
+    show_site_score "$DETECT_SCORE_ENABLED" "$DETECT_SCORE_TOTAL"
     echo ""
 }
 

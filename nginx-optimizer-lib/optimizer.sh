@@ -687,27 +687,7 @@ apply_optimizations() {
     # Ensure templates exist if referenced by includes in sites-enabled
     ensure_referenced_templates
 
-    # Determine which features to apply
-    local features=()
-
-    if [ -n "$specific_feature" ]; then
-        features=("$specific_feature")
-    else
-        features=("http3" "fastcgi-cache" "redis" "brotli" "security" "wordpress" "opcache")
-
-        # Remove excluded feature
-        if [ -n "$exclude_feature" ]; then
-            local temp_features=()
-            for feature in "${features[@]}"; do
-                if [ "$feature" != "$exclude_feature" ] && [ -n "$feature" ]; then
-                    temp_features+=("$feature")
-                fi
-            done
-            features=("${temp_features[@]}")
-        fi
-    fi
-
-    # Show features section
+    # Show features section header
     if type -t ui_section &>/dev/null; then
         if [ -n "$specific_feature" ]; then
             ui_section "Applying $(get_feature_display_name "$specific_feature")..."
@@ -715,43 +695,71 @@ apply_optimizations() {
             ui_section "Applying optimizations..."
         fi
     else
-        log_info "Features to apply: ${features[*]}"
+        log_info "Applying optimizations..."
         echo ""
     fi
 
-    # Apply each feature (with common aliases)
-    for feature in "${features[@]}"; do
-        case "$feature" in
-            http3|quic)
-                optimize_http3 "$target_site"
-                ;;
-            fastcgi-cache|fastcgi|cache)
-                optimize_fastcgi_cache "$target_site"
-                ;;
-            redis)
-                optimize_redis "$target_site"
-                ;;
-            brotli|compression)
-                optimize_brotli "$target_site"
-                ;;
-            security|headers)
-                optimize_security "$target_site"
-                ;;
-            wordpress|wp)
-                optimize_wordpress "$target_site"
-                ;;
-            opcache|php)
-                optimize_opcache "$target_site"
-                ;;
-            www-ssl|www)
-                optimize_www_ssl "$target_site"
-                ;;
-            *)
-                log_warn "Unknown feature: $feature"
-                log_info "Valid features: http3, fastcgi-cache, redis, brotli, security, wordpress, opcache, www-ssl"
-                ;;
-        esac
-    done
+    # NEW: Use registry-based optimization instead of case statement loop
+    # Resolve specific feature to ID if provided
+    local resolved_specific_id=""
+    if [ -n "$specific_feature" ]; then
+        resolved_specific_id=$(feature_get_by_alias "$specific_feature" 2>/dev/null)
+        if [ -z "$resolved_specific_id" ]; then
+            log_warn "Feature '$specific_feature' not found in registry"
+            return 1
+        fi
+    fi
+
+    # Resolve exclude feature to ID if provided
+    local resolved_exclude_id=""
+    if [ -n "$exclude_feature" ]; then
+        resolved_exclude_id=$(feature_get_by_alias "$exclude_feature" 2>/dev/null)
+        if [ -z "$resolved_exclude_id" ]; then
+            log_warn "Feature '$exclude_feature' not found in registry"
+            return 1
+        fi
+    fi
+
+    # Loop through all registered features
+    local feature_id
+    while IFS= read -r feature_id; do
+        [ -z "$feature_id" ] && continue
+
+        # Apply filters
+        if [ -n "$resolved_specific_id" ] && [ "$feature_id" != "$resolved_specific_id" ]; then
+            continue
+        fi
+
+        if [ -n "$resolved_exclude_id" ] && [ "$feature_id" = "$resolved_exclude_id" ]; then
+            continue
+        fi
+
+        # Get feature display name
+        local display_name
+        display_name=$(feature_get "$feature_id" "display" 2>/dev/null)
+        [ -z "$display_name" ] && display_name="$feature_id"
+
+        # Show progress
+        if type -t ui_step &>/dev/null; then
+            ui_step "Applying $display_name..."
+        else
+            log_info "Applying $display_name..."
+        fi
+
+        # Apply feature via registry
+        if feature_apply "$feature_id" "$target_site"; then
+            APPLIED_OPTIMIZATIONS+=("$display_name")
+            if type -t ui_step &>/dev/null; then
+                ui_step "$display_name applied"
+            else
+                log_success "$display_name applied"
+            fi
+        else
+            if type -t log_warn &>/dev/null; then
+                log_warn "Failed to apply $display_name"
+            fi
+        fi
+    done < <(feature_list)
 
     # Summary
     local applied_count=0
@@ -787,6 +795,181 @@ apply_optimizations() {
         fi
         echo ""
     fi
+}
+
+################################################################################
+# Registry-Based Optimization
+################################################################################
+
+# Apply features using the registry system
+# Args: $1 = target_site, $2 = specific_feature (optional), $3 = exclude_feature (optional)
+# Returns: 0 on success
+optimize_all_with_registry() {
+    local target_site="${1:-}"
+    local specific_feature="${2:-}"
+    local exclude_feature="${3:-}"
+
+    # Reset tracking
+    reset_applied_optimizations
+
+    # Show header if UI functions available
+    if type -t ui_header &>/dev/null; then
+        ui_header
+
+        if [ "$DRY_RUN" = true ]; then
+            ui_warn_box "DRY RUN MODE - No changes will be made"
+        fi
+        ui_blank
+    else
+        log_info "Applying optimizations via registry..."
+        if [ "$DRY_RUN" = true ]; then
+            log_warn "DRY RUN MODE - Showing what would be done"
+        fi
+    fi
+
+    # Show target info
+    if type -t ui_context &>/dev/null; then
+        if [ -n "$specific_feature" ]; then
+            # Resolve feature display name
+            local resolved_id
+            resolved_id=$(feature_get_by_alias "$specific_feature" 2>/dev/null)
+            local display_name
+            if [ -n "$resolved_id" ]; then
+                display_name=$(feature_get "$resolved_id" "display" 2>/dev/null)
+            fi
+            ui_context "Optimizing" "${display_name:-$specific_feature}"
+        else
+            ui_context "Optimizing" "All registered features"
+        fi
+        ui_context "Target" "${target_site:-All sites}"
+    else
+        if [ -n "$target_site" ]; then
+            log_info "Target: ${target_site}"
+        else
+            log_info "Target: All sites"
+        fi
+    fi
+
+    # Preparation phase
+    if type -t ui_section &>/dev/null; then
+        ui_section "Preparing..."
+    fi
+
+    # Purge cached templates
+    local purged_count
+    purged_count=$(purge_cached_templates 2>&1 | grep -oE '[0-9]+' | tail -1 || echo "0")
+    if type -t ui_step &>/dev/null; then
+        ui_step "Prerequisites satisfied"
+        if [ "${purged_count:-0}" -gt 0 ]; then
+            ui_step "Cached templates purged" "${purged_count} files"
+        fi
+    fi
+
+    # Ensure referenced templates exist
+    ensure_referenced_templates
+
+    # Show features section
+    if type -t ui_section &>/dev/null; then
+        ui_section "Applying optimizations..."
+    fi
+
+    # Resolve specific feature to ID if provided
+    local resolved_specific_id=""
+    if [ -n "$specific_feature" ]; then
+        resolved_specific_id=$(feature_get_by_alias "$specific_feature" 2>/dev/null)
+        if [ -z "$resolved_specific_id" ]; then
+            log_warn "Feature '$specific_feature' not found in registry"
+            return 1
+        fi
+    fi
+
+    # Resolve exclude feature to ID if provided
+    local resolved_exclude_id=""
+    if [ -n "$exclude_feature" ]; then
+        resolved_exclude_id=$(feature_get_by_alias "$exclude_feature" 2>/dev/null)
+        if [ -z "$resolved_exclude_id" ]; then
+            log_warn "Feature '$exclude_feature' not found in registry"
+            return 1
+        fi
+    fi
+
+    # Loop through all registered features
+    local feature_id
+    while IFS= read -r feature_id; do
+        [ -z "$feature_id" ] && continue
+
+        # Apply filters
+        if [ -n "$resolved_specific_id" ] && [ "$feature_id" != "$resolved_specific_id" ]; then
+            continue
+        fi
+
+        if [ -n "$resolved_exclude_id" ] && [ "$feature_id" = "$resolved_exclude_id" ]; then
+            continue
+        fi
+
+        # Get feature display name
+        local display_name
+        display_name=$(feature_get "$feature_id" "display" 2>/dev/null)
+        [ -z "$display_name" ] && display_name="$feature_id"
+
+        # Show progress
+        if type -t ui_step &>/dev/null; then
+            ui_step "Applying $display_name..."
+        else
+            log_info "Applying $display_name..."
+        fi
+
+        # Apply feature via registry
+        if feature_apply "$feature_id" "$target_site"; then
+            APPLIED_OPTIMIZATIONS+=("$display_name")
+            if type -t ui_step &>/dev/null; then
+                ui_step "$display_name applied"
+            else
+                log_success "$display_name applied"
+            fi
+        else
+            if type -t log_warn &>/dev/null; then
+                log_warn "Failed to apply $display_name"
+            fi
+        fi
+    done < <(feature_list)
+
+    # Summary
+    local applied_count=0
+    if [ ${#APPLIED_OPTIMIZATIONS[@]} -gt 0 ] 2>/dev/null; then
+        applied_count=${#APPLIED_OPTIMIZATIONS[@]}
+    fi
+
+    ui_blank
+
+    if [ "$applied_count" -gt 0 ] && type -t ui_success_box &>/dev/null; then
+        # Build summary lines
+        local summary_lines=()
+        summary_lines+=("Applied ${applied_count} optimization(s):")
+        for opt in "${APPLIED_OPTIMIZATIONS[@]}"; do
+            summary_lines+=("  ${UI_BULLET:-•} $opt")
+        done
+        summary_lines+=("")
+        # Shorten log path for display
+        local short_log="${LOG_FILE/#$HOME/~}"
+        summary_lines+=("Log: ${short_log}")
+
+        ui_success_box "Optimization complete" "${summary_lines[@]}"
+    else
+        log_info "Applied ${applied_count} optimization(s)"
+
+        # Show what was applied
+        if [ "$applied_count" -gt 0 ]; then
+            echo ""
+            echo "Applied Optimizations:"
+            for opt in "${APPLIED_OPTIMIZATIONS[@]}"; do
+                echo -e "  ${GREEN}✓${NC} $opt"
+            done
+        fi
+        echo ""
+    fi
+
+    return 0
 }
 
 ################################################################################

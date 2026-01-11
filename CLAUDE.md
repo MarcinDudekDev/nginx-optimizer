@@ -31,9 +31,40 @@ nginx-optimizer is a bash-based CLI tool for optimizing nginx configurations. It
 ### Entry Point
 `nginx-optimizer.sh` - Main script that parses arguments, initializes directories, sources libraries, and dispatches to command functions.
 
-### Library Modules (nginx-optimizer-lib/)
-- `detector.sh` - Detects nginx installations (system, Docker, wp-test) and analyzes config status
-- `optimizer.sh` - Core optimization logic, applies features to nginx configs
+### Plugin Architecture (lib/) - NEW
+Modular feature system where each feature is a self-contained module:
+
+```
+lib/
+├── registry.sh          # Feature registration API
+├── core/
+│   └── templates.sh     # Template deployment helpers
+└── features/
+    ├── http3.sh         # HTTP/3 QUIC
+    ├── fastcgi-cache.sh # FastCGI caching
+    ├── brotli.sh        # Brotli compression
+    ├── security.sh      # Security headers
+    ├── wordpress.sh     # WordPress exclusions
+    ├── redis.sh         # Redis object cache
+    └── opcache.sh       # PHP OpCache
+```
+
+**Registry API:**
+- `feature_register()` - Register a feature module
+- `feature_detect()` - Check if feature is enabled
+- `feature_apply()` - Apply a feature optimization
+- `feature_list()` - List all registered features
+- `feature_get()` - Get feature metadata
+
+**Adding a new feature:**
+1. Create `lib/features/myfeature.sh`
+2. Define `FEATURE_ID`, `FEATURE_DISPLAY`, `FEATURE_DETECT_PATTERN`
+3. Optionally add `feature_detect_custom_myfeature()` or `feature_apply_custom_myfeature()`
+4. Call `feature_register` at the end
+
+### Legacy Library Modules (nginx-optimizer-lib/)
+- `detector.sh` - Uses registry for detection via `detect_all_features_for_site()`
+- `optimizer.sh` - Uses registry for optimization via `feature_apply()` loop
 - `backup.sh` - Timestamped backup/restore with rsync
 - `validator.sh` - Tests nginx config validity and reloads
 - `compiler.sh` - Compiles nginx from source with Brotli
@@ -41,6 +72,7 @@ nginx-optimizer is a bash-based CLI tool for optimizing nginx configurations. It
 - `monitoring.sh` - Sets up monitoring dashboard scripts
 - `honeypot.sh` - Bot tarpit with canary tokens and fail2ban integration
 - `docker.sh` - Docker image building
+- `warning-fixer.sh` - Auto-fix nginx config warnings
 
 ### Templates (nginx-optimizer-templates/)
 Config snippets that get copied/included into nginx configurations:
