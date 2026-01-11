@@ -56,21 +56,43 @@ create_backup() {
 
     local backup_failed=false
 
-    # Backup system nginx
+    # Backup system nginx (all possible paths)
+    local system_nginx_backed_up=false
+
     if [ -d /etc/nginx ]; then
-        log_info "Backing up system nginx config..."
+        log_info "Backing up system nginx config (/etc/nginx)..."
         mkdir -p "${CURRENT_BACKUP_DIR}/nginx"
-        if ! rsync -a /etc/nginx/ "${CURRENT_BACKUP_DIR}/nginx/" 2>/dev/null; then
+        if rsync -a /etc/nginx/ "${CURRENT_BACKUP_DIR}/nginx/" 2>/dev/null; then
+            system_nginx_backed_up=true
+        else
             log_warn "Could not backup /etc/nginx (permission denied?)"
         fi
     fi
 
     if [ -d /usr/local/etc/nginx ]; then
-        log_info "Backing up homebrew nginx config..."
-        mkdir -p "${CURRENT_BACKUP_DIR}/nginx-homebrew"
-        if ! rsync -a /usr/local/etc/nginx/ "${CURRENT_BACKUP_DIR}/nginx-homebrew/" 2>/dev/null; then
+        log_info "Backing up homebrew nginx config (Intel)..."
+        mkdir -p "${CURRENT_BACKUP_DIR}/nginx-homebrew-intel"
+        if rsync -a /usr/local/etc/nginx/ "${CURRENT_BACKUP_DIR}/nginx-homebrew-intel/" 2>/dev/null; then
+            system_nginx_backed_up=true
+        else
             log_warn "Could not backup /usr/local/etc/nginx"
         fi
+    fi
+
+    if [ -d /opt/homebrew/etc/nginx ]; then
+        log_info "Backing up homebrew nginx config (Apple Silicon)..."
+        mkdir -p "${CURRENT_BACKUP_DIR}/nginx-homebrew-arm"
+        if rsync -a /opt/homebrew/etc/nginx/ "${CURRENT_BACKUP_DIR}/nginx-homebrew-arm/" 2>/dev/null; then
+            system_nginx_backed_up=true
+        else
+            log_warn "Could not backup /opt/homebrew/etc/nginx"
+        fi
+    fi
+
+    # CRITICAL: If --system-only mode and no system nginx backed up, fail
+    if [ "${SYSTEM_ONLY:-false}" = true ] && [ "$system_nginx_backed_up" = false ]; then
+        log_error "CRITICAL: Failed to backup system nginx config in --system-only mode"
+        backup_failed=true
     fi
 
     # Backup wp-test nginx (critical for wp-test sites)
@@ -185,15 +207,31 @@ BACKUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "Restoring from backup: $BACKUP_DIR"
 
-# Restore system nginx
+# Restore system nginx (all paths)
 if [ -d "$BACKUP_DIR/nginx" ] && [ -d /etc/nginx ]; then
-    echo "Restoring system nginx..."
-    rsync -a "$BACKUP_DIR/nginx/" /etc/nginx/
+    echo "Restoring system nginx (/etc/nginx)..."
+    sudo rsync -a "$BACKUP_DIR/nginx/" /etc/nginx/
 fi
 
-if [ -d "$BACKUP_DIR/nginx-homebrew" ] && [ -d /usr/local/etc/nginx ]; then
-    echo "Restoring homebrew nginx..."
-    rsync -a "$BACKUP_DIR/nginx-homebrew/" /usr/local/etc/nginx/
+if [ -d "$BACKUP_DIR/nginx-homebrew-intel" ] && [ -d /usr/local/etc/nginx ]; then
+    echo "Restoring homebrew nginx (Intel)..."
+    rsync -a "$BACKUP_DIR/nginx-homebrew-intel/" /usr/local/etc/nginx/
+fi
+
+if [ -d "$BACKUP_DIR/nginx-homebrew-arm" ] && [ -d /opt/homebrew/etc/nginx ]; then
+    echo "Restoring homebrew nginx (Apple Silicon)..."
+    rsync -a "$BACKUP_DIR/nginx-homebrew-arm/" /opt/homebrew/etc/nginx/
+fi
+
+# Legacy support for old backup format
+if [ -d "$BACKUP_DIR/nginx-homebrew" ]; then
+    if [ -d /usr/local/etc/nginx ]; then
+        echo "Restoring legacy homebrew nginx..."
+        rsync -a "$BACKUP_DIR/nginx-homebrew/" /usr/local/etc/nginx/
+    elif [ -d /opt/homebrew/etc/nginx ]; then
+        echo "Restoring legacy homebrew nginx to Apple Silicon..."
+        rsync -a "$BACKUP_DIR/nginx-homebrew/" /opt/homebrew/etc/nginx/
+    fi
 fi
 
 # Restore wp-test nginx
@@ -308,10 +346,31 @@ manual_restore() {
         systemctl stop nginx || true
     fi
 
-    # Restore system nginx
+    # Restore system nginx (all paths)
     if [ -d "$backup_path/nginx" ] && [ -d /etc/nginx ]; then
-        log_info "Restoring system nginx..."
-        rsync -a "$backup_path/nginx/" /etc/nginx/
+        log_info "Restoring system nginx (/etc/nginx)..."
+        sudo rsync -a "$backup_path/nginx/" /etc/nginx/
+    fi
+
+    if [ -d "$backup_path/nginx-homebrew-intel" ] && [ -d /usr/local/etc/nginx ]; then
+        log_info "Restoring homebrew nginx (Intel)..."
+        rsync -a "$backup_path/nginx-homebrew-intel/" /usr/local/etc/nginx/
+    fi
+
+    if [ -d "$backup_path/nginx-homebrew-arm" ] && [ -d /opt/homebrew/etc/nginx ]; then
+        log_info "Restoring homebrew nginx (Apple Silicon)..."
+        rsync -a "$backup_path/nginx-homebrew-arm/" /opt/homebrew/etc/nginx/
+    fi
+
+    # Legacy: Handle old backup format (nginx-homebrew)
+    if [ -d "$backup_path/nginx-homebrew" ]; then
+        if [ -d /usr/local/etc/nginx ]; then
+            log_info "Restoring legacy homebrew nginx..."
+            rsync -a "$backup_path/nginx-homebrew/" /usr/local/etc/nginx/
+        elif [ -d /opt/homebrew/etc/nginx ]; then
+            log_info "Restoring legacy homebrew nginx to Apple Silicon..."
+            rsync -a "$backup_path/nginx-homebrew/" /opt/homebrew/etc/nginx/
+        fi
     fi
 
     # Restore wp-test nginx
