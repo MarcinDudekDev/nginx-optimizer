@@ -202,6 +202,89 @@ log_to_file() {
 }
 
 ################################################################################
+# Cross-Platform Compatibility Helpers
+################################################################################
+
+# Copy file permissions from source to destination (cross-platform)
+# Works on both BSD (macOS) and GNU (Linux) systems
+copy_file_permissions() {
+    local src="$1"
+    local dst="$2"
+
+    [ ! -f "$src" ] && return 1
+    [ ! -f "$dst" ] && return 1
+
+    if [[ "$(uname)" == "Darwin" ]]; then
+        # BSD stat format
+        local mode
+        mode=$(stat -f '%A' "$src" 2>/dev/null)
+        [ -n "$mode" ] && chmod "$mode" "$dst" 2>/dev/null
+    else
+        # Try GNU --reference first, fallback to stat -c
+        if ! chmod --reference="$src" "$dst" 2>/dev/null; then
+            local mode
+            mode=$(stat -c '%a' "$src" 2>/dev/null)
+            [ -n "$mode" ] && chmod "$mode" "$dst" 2>/dev/null
+        fi
+    fi
+}
+
+# Copy file ownership from source to destination (cross-platform)
+# Requires appropriate privileges (sudo)
+copy_file_ownership() {
+    local src="$1"
+    local dst="$2"
+
+    [ ! -f "$src" ] && return 1
+    [ ! -f "$dst" ] && return 1
+
+    if [[ "$(uname)" == "Darwin" ]]; then
+        # BSD stat format
+        local owner group
+        owner=$(stat -f '%Su' "$src" 2>/dev/null)
+        group=$(stat -f '%Sg' "$src" 2>/dev/null)
+        [ -n "$owner" ] && [ -n "$group" ] && chown "${owner}:${group}" "$dst" 2>/dev/null
+    else
+        # Try GNU --reference first, fallback to stat -c
+        if ! chown --reference="$src" "$dst" 2>/dev/null; then
+            local owner group
+            owner=$(stat -c '%U' "$src" 2>/dev/null)
+            group=$(stat -c '%G' "$src" 2>/dev/null)
+            [ -n "$owner" ] && [ -n "$group" ] && chown "${owner}:${group}" "$dst" 2>/dev/null
+        fi
+    fi
+}
+
+# Cross-platform sed -i (in-place edit)
+# Usage: sed_i 's/old/new/' file
+# Usage: sed_i --sudo 's/old/new/' file
+sed_i() {
+    local use_sudo=""
+    if [[ "$1" == "--sudo" ]]; then
+        use_sudo="sudo"
+        shift
+    fi
+    if [[ "$(uname)" == "Darwin" ]]; then
+        $use_sudo sed -i '' "$@"
+    else
+        $use_sudo sed -i "$@"
+    fi
+}
+
+# Create temp file with secure permissions (mode 600)
+# Usage: secure_mktemp [template]
+secure_mktemp() {
+    local template="${1:-/tmp/nginx-opt.XXXXXX}"
+    local old_umask
+    old_umask=$(umask)
+    umask 077  # Secure: owner read/write only
+    local temp_file
+    temp_file=$(mktemp "$template")
+    umask "$old_umask"  # Restore original umask
+    echo "$temp_file"
+}
+
+################################################################################
 # Atomic File Operations & Transaction Helpers
 ################################################################################
 
@@ -220,7 +303,7 @@ atomic_write_file() {
     local target_dir
     target_dir=$(dirname "$target_path")
     local temp_file
-    temp_file=$(mktemp "${target_dir}/.nginx-opt.XXXXXX")
+    temp_file=$(secure_mktemp "${target_dir}/.nginx-opt.XXXXXX")
 
     # Copy content to temp file
     if [ -f "$source" ]; then
@@ -233,8 +316,8 @@ atomic_write_file() {
 
     # Preserve permissions if target exists
     if [ -f "$target_path" ]; then
-        chmod --reference="$target_path" "$temp_file" 2>/dev/null || \
-        chown --reference="$target_path" "$temp_file" 2>/dev/null || true
+        copy_file_permissions "$target_path" "$temp_file" 2>/dev/null || true
+        copy_file_ownership "$target_path" "$temp_file" 2>/dev/null || true
     fi
 
     # Atomic move (POSIX guarantees atomicity on same filesystem)
@@ -262,14 +345,14 @@ transaction_add_file() {
     local target_dir
     target_dir=$(dirname "$original_path")
     local temp_file
-    temp_file=$(mktemp "${target_dir}/.nginx-opt-txn.XXXXXX")
+    temp_file=$(secure_mktemp "${target_dir}/.nginx-opt-txn.XXXXXX")
 
     # Copy original if it exists
     if [ -f "$original_path" ]; then
         cp "$original_path" "$temp_file"
-        chmod --reference="$original_path" "$temp_file" 2>/dev/null || true
+        copy_file_permissions "$original_path" "$temp_file" 2>/dev/null || true
         if command -v chown &>/dev/null; then
-            chown --reference="$original_path" "$temp_file" 2>/dev/null || true
+            copy_file_ownership "$original_path" "$temp_file" 2>/dev/null || true
         fi
     fi
 
@@ -1039,7 +1122,7 @@ apply_fastcgi_cache_system() {
 
         # Inject the include directive
         local temp_file
-        temp_file=$(mktemp)
+        temp_file=$(secure_mktemp)
 
         # Add include after server { line
         awk '
@@ -1452,7 +1535,7 @@ apply_security_wptest() {
 
         # Add include directive at the beginning
         local temp_file
-        temp_file=$(mktemp)
+        temp_file=$(secure_mktemp)
         echo "# Include default security headers" > "$temp_file"
         echo "include /etc/nginx/vhost.d/default;" >> "$temp_file"
         echo "" >> "$temp_file"
@@ -1864,7 +1947,7 @@ optimize_www_ssl() {
 
         # Use sed to add www to server_name in SSL blocks
         # This is safe because we've verified the pattern exists
-        sudo sed -i "s/server_name ${base_domain};/server_name ${base_domain} www.${base_domain};/g" "$site_conf"
+        sed_i --sudo "s/server_name ${base_domain};/server_name ${base_domain} www.${base_domain};/g" "$site_conf"
 
         # Test config
         if nginx -t 2>&1 | grep -q "test failed\|emerg"; then

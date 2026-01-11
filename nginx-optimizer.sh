@@ -54,6 +54,29 @@ EXCLUDE_FEATURE=""
 CUSTOM_BACKUP_DIR=""
 TARGET_SITE=""
 
+# Allowed feature names for --feature flag
+ALLOWED_FEATURES=(
+    "http3" "quic"
+    "fastcgi-cache" "fastcgi" "cache"
+    "redis"
+    "brotli" "compression"
+    "security" "headers"
+    "wordpress" "wp"
+    "opcache" "php"
+    "www-ssl" "www"
+    "honeypot"
+)
+
+# Validate feature name against allowed list
+validate_feature_name() {
+    local feature="$1"
+    local allowed
+    for allowed in "${ALLOWED_FEATURES[@]}"; do
+        [[ "$feature" == "$allowed" ]] && return 0
+    done
+    return 1
+}
+
 ################################################################################
 # Lock File Management
 ################################################################################
@@ -706,12 +729,22 @@ parse_arguments() {
                     log_error "--feature requires a value"
                     exit 1
                 fi
+                if ! validate_feature_name "$2"; then
+                    log_error "Unknown feature: $2"
+                    log_info "Valid features: ${ALLOWED_FEATURES[*]}"
+                    exit 1
+                fi
                 SPECIFIC_FEATURE="$2"
                 shift 2
                 ;;
             --exclude)
                 if [ -z "${2:-}" ] || [[ "$2" == -* ]]; then
                     log_error "--exclude requires a value"
+                    exit 1
+                fi
+                if ! validate_feature_name "$2"; then
+                    log_error "Unknown feature to exclude: $2"
+                    log_info "Valid features: ${ALLOWED_FEATURES[*]}"
                     exit 1
                 fi
                 EXCLUDE_FEATURE="$2"

@@ -7,6 +7,27 @@
 # Timeout for nginx operations (seconds)
 NGINX_TIMEOUT=30
 
+# Timeout for curl HTTP requests (seconds)
+CURL_TIMEOUT=30
+CURL_CONNECT_TIMEOUT=10
+
+################################################################################
+# Input Validation
+################################################################################
+
+# Validate Docker container name format
+# Docker container names must:
+# - Start with alphanumeric character
+# - Contain only alphanumeric, underscore, dot, or hyphen
+validate_container_name() {
+    local name="$1"
+    if [[ ! "$name" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
+        log_warn "Invalid container name format: $name"
+        return 1
+    fi
+    return 0
+}
+
 ################################################################################
 # Timeout Wrapper
 ################################################################################
@@ -54,6 +75,12 @@ test_nginx_config() {
 
         if [ -n "$containers" ]; then
             while IFS= read -r container; do
+                # Validate container name before using in docker exec
+                if ! validate_container_name "$container"; then
+                    log_warn "Skipping container with invalid name: $container"
+                    continue
+                fi
+
                 log_info "Testing Docker nginx: $container..."
 
                 if run_with_timeout $NGINX_TIMEOUT docker exec "$container" nginx -t 2>&1 | tee -a "$LOG_FILE"; then
@@ -93,7 +120,7 @@ test_http_response() {
     log_info "Testing HTTP response: $url"
 
     local response
-    response=$(curl -s -o /dev/null -w "%{http_code}" "$url" 2>/dev/null)
+    response=$(curl -s --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" -o /dev/null -w "%{http_code}" "$url" 2>/dev/null)
 
     if [ "$response" = "$expected_status" ]; then
         log_success "HTTP $response OK"
@@ -111,7 +138,7 @@ test_header_present() {
     log_info "Checking for header: $header_name"
 
     local header
-    header=$(curl -sI "$url" 2>/dev/null | grep -i "^${header_name}:")
+    header=$(curl -sI --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "$url" 2>/dev/null | grep -i "^${header_name}:")
 
     if [ -n "$header" ]; then
         log_success "Header found: $header"
@@ -129,7 +156,7 @@ test_http3_support() {
 
     # Check for Alt-Svc header
     local alt_svc
-    alt_svc=$(curl -sI "https://$domain" 2>/dev/null | grep -i "alt-svc:")
+    alt_svc=$(curl -sI --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "https://$domain" 2>/dev/null | grep -i "alt-svc:")
 
     if echo "$alt_svc" | grep -q "h3"; then
         log_success "HTTP/3 advertised: $alt_svc"
@@ -148,14 +175,14 @@ test_cache_functionality() {
     # First request (MISS)
     log_info "Request 1: Should be cache MISS"
     local cache1
-    cache1=$(curl -sI "$url" 2>/dev/null | grep -i "x-fastcgi-cache:")
+    cache1=$(curl -sI --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "$url" 2>/dev/null | grep -i "x-fastcgi-cache:")
     echo "  $cache1"
 
     # Second request (should be HIT)
     sleep 1
     log_info "Request 2: Should be cache HIT"
     local cache2
-    cache2=$(curl -sI "$url" 2>/dev/null | grep -i "x-fastcgi-cache:")
+    cache2=$(curl -sI --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "$url" 2>/dev/null | grep -i "x-fastcgi-cache:")
     echo "  $cache2"
 
     if echo "$cache2" | grep -q "HIT"; then
@@ -174,14 +201,14 @@ test_compression() {
 
     # Check for Brotli
     local brotli
-    brotli=$(curl -sI -H "Accept-Encoding: br" "$url" 2>/dev/null | grep -i "content-encoding:")
+    brotli=$(curl -sI --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" -H "Accept-Encoding: br" "$url" 2>/dev/null | grep -i "content-encoding:")
 
     if echo "$brotli" | grep -q "br"; then
         log_success "Brotli compression enabled"
     else
         # Check for gzip
         local gzip
-        gzip=$(curl -sI -H "Accept-Encoding: gzip" "$url" 2>/dev/null | grep -i "content-encoding:")
+        gzip=$(curl -sI --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" -H "Accept-Encoding: gzip" "$url" 2>/dev/null | grep -i "content-encoding:")
 
         if echo "$gzip" | grep -q "gzip"; then
             log_success "Gzip compression enabled"
@@ -238,7 +265,7 @@ test_wordpress_exclusions() {
     # Test xmlrpc.php (should be denied)
     log_info "Testing xmlrpc.php block..."
     local xmlrpc_status
-    xmlrpc_status=$(curl -s -o /dev/null -w "%{http_code}" "https://$domain/xmlrpc.php" 2>/dev/null)
+    xmlrpc_status=$(curl -s --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" -o /dev/null -w "%{http_code}" "https://$domain/xmlrpc.php" 2>/dev/null)
 
     if [ "$xmlrpc_status" = "403" ] || [ "$xmlrpc_status" = "404" ]; then
         log_success "xmlrpc.php blocked (HTTP $xmlrpc_status)"
@@ -249,7 +276,7 @@ test_wordpress_exclusions() {
     # Test wp-config.php access (should be denied)
     log_info "Testing wp-config.php protection..."
     local wpconfig_status
-    wpconfig_status=$(curl -s -o /dev/null -w "%{http_code}" "https://$domain/wp-config.php" 2>/dev/null)
+    wpconfig_status=$(curl -s --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" -o /dev/null -w "%{http_code}" "https://$domain/wp-config.php" 2>/dev/null)
 
     if [ "$wpconfig_status" = "403" ] || [ "$wpconfig_status" = "404" ]; then
         log_success "wp-config.php protected (HTTP $wpconfig_status)"
@@ -272,7 +299,7 @@ test_rate_limiting() {
     local status
 
     for _ in $(seq 1 $requests); do
-        status=$(curl -s -o /dev/null -w "%{http_code}" "$url" 2>/dev/null)
+        status=$(curl -s --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" -o /dev/null -w "%{http_code}" "$url" 2>/dev/null)
 
         if [ "$status" = "429" ] || [ "$status" = "503" ]; then
             blocked=$((blocked + 1))
@@ -298,7 +325,7 @@ test_ssl_configuration() {
     log_info "Testing SSL/TLS configuration..."
 
     # Test SSL connection
-    if ! curl -sI "https://$domain" &>/dev/null; then
+    if ! curl -sI --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "https://$domain" &>/dev/null; then
         log_error "SSL connection failed"
         return 1
     fi
@@ -386,7 +413,7 @@ health_check_sites() {
 
                 # Use -k to allow self-signed certs (common in dev)
                 local status
-                status=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 10 "$url" 2>/dev/null)
+                status=$(curl -sk --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" -o /dev/null -w "%{http_code}" "$url" 2>/dev/null)
 
                 if [ "$status" = "200" ] || [ "$status" = "301" ] || [ "$status" = "302" ]; then
                     log_success "  $domain: HTTP $status OK"
@@ -464,6 +491,12 @@ reload_nginx() {
 
         if [ -n "$containers" ]; then
             while IFS= read -r container; do
+                # Validate container name before using in docker exec
+                if ! validate_container_name "$container"; then
+                    log_warn "Skipping container with invalid name: $container"
+                    continue
+                fi
+
                 log_info "Reloading Docker nginx: $container..."
                 if docker exec "$container" nginx -s reload 2>&1 | tee -a "$LOG_FILE"; then
                     log_success "Docker nginx ($container) reloaded"
