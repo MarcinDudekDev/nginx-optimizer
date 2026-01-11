@@ -35,6 +35,7 @@ FEATURE_CACHE=""
 FEATURE_CACHE_BUILT=false
 
 # Feature patterns to detect (feature_name:regex)
+# shellcheck disable=SC2034  # Reserved for future dynamic pattern matching
 FEATURE_PATTERNS="http3:listen.*quic
 fastcgi_cache:fastcgi_cache[^_]
 brotli:brotli on
@@ -155,7 +156,7 @@ parse_nginx_config() {
     fi
 
     # Clear cache file
-    > "$PARSED_CONFIG_CACHE"
+    : > "$PARSED_CONFIG_CACHE"
 
     # Get nginx -T output if not provided
     if [ -z "$config_output" ]; then

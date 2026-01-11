@@ -78,7 +78,7 @@ fix_http2_deprecation() {
             sudo sed -i '/ssl_certificate[^_]/a\    http2 on;' "$file"
         else
             # Add after first server { line
-            sudo awk 'BEGIN{done=0} /server\s*\{/ && !done {print; print "    http2 on;"; done=1; next} {print}' "$file" > /tmp/http2fix.tmp
+            awk 'BEGIN{done=0} /server\s*\{/ && !done {print; print "    http2 on;"; done=1; next} {print}' "$file" | sudo tee /tmp/http2fix.tmp > /dev/null
             sudo mv /tmp/http2fix.tmp "$file"
         fi
     fi
@@ -98,6 +98,7 @@ fix_http2_deprecation() {
 # Fix conflicting server_name by finding and offering to remove duplicates
 fix_conflicting_servername() {
     local domain="$1"
+    # shellcheck disable=SC2034  # Reserved for future port-specific filtering
     local port="${2:-80}"
 
     # Find all files with this server_name on this port

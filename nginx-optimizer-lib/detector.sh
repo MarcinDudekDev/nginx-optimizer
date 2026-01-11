@@ -518,8 +518,10 @@ get_site_config_files() {
             brace_depth=1
         elif [ "$in_server_block" = true ]; then
             # Count braces to track depth
-            local open_braces=$(echo "$line" | tr -cd '{' | wc -c | tr -d ' ')
-            local close_braces=$(echo "$line" | tr -cd '}' | wc -c | tr -d ' ')
+            local open_braces
+            local close_braces
+            open_braces=$(echo "$line" | tr -cd '{' | wc -c | tr -d ' ')
+            close_braces=$(echo "$line" | tr -cd '}' | wc -c | tr -d ' ')
             brace_depth=$((brace_depth + open_braces - close_braces))
 
             # Check for server_name matching this site
@@ -738,7 +740,8 @@ format_source_path() {
     # ~/.wp-test/nginx/vhost.d/site.conf -> vhost.d/site.conf
 
     # Count the number of slashes
-    local slash_count=$(echo "$path" | tr -cd '/' | wc -c | tr -d ' ')
+    local slash_count
+    slash_count=$(echo "$path" | tr -cd '/' | wc -c | tr -d ' ')
 
     if [ "$slash_count" -ge 2 ]; then
         # Extract last 2 components: dir/file.conf
@@ -988,7 +991,6 @@ detect_all_features_for_site() {
     fi
 
     # Loop through all registered features
-    local feature_line
     while IFS='|' read -r feature_id feature_display; do
         [ -z "$feature_id" ] && continue
 
@@ -1313,7 +1315,7 @@ analyze_optimizations() {
             local found=false
             local site_config=""
 
-            while IFS='|' read -r site_name config_file ssl_status; do
+            while IFS='|' read -r site_name config_file _; do
                 if [ "$site_name" = "$target_site" ]; then
                     site_config="$config_file"
                     found=true
@@ -1383,7 +1385,7 @@ analyze_optimizations() {
     reset_recommendations
 
     # Iterate through each unique site
-    while IFS='|' read -r site_name config_file ssl_status; do
+    while IFS='|' read -r site_name config_file _; do
         # Skip empty lines
         [ -z "$site_name" ] && continue
 
@@ -1421,6 +1423,7 @@ SCORE_TOTAL=0
 # Format: "http3:site1.com\nhttp3:site2.com\nbrotli:ALL\n..."
 MISSING_FEATURES=""
 TOTAL_SITES_ANALYZED=0
+# shellcheck disable=SC2034  # Reserved for future use (site tracking)
 ALL_SITES_LIST=""
 
 # Feature metadata: feature_name|display_name|is_global|cli_feature
@@ -1447,6 +1450,7 @@ record_missing_feature() {
 reset_recommendations() {
     MISSING_FEATURES=""
     TOTAL_SITES_ANALYZED=0
+    # shellcheck disable=SC2034  # Reserved for future use
     ALL_SITES_LIST=""
 }
 
@@ -1565,7 +1569,6 @@ show_recommendations() {
                 echo ""
                 log_info "Re-analyzing configurations..."
                 # Clear cache and re-run full analysis
-                FEATURE_CACHE_BUILT=false
                 NO_CACHE=true
                 MISSING_FEATURES=""
                 reset_recommendations
@@ -1622,7 +1625,6 @@ show_recommendations() {
                 # Re-analyze after applying
                 echo ""
                 echo -e "  ${CYAN}Re-analyzing to update status...${NC}"
-                FEATURE_CACHE_BUILT=false
                 NO_CACHE=true
                 MISSING_FEATURES=""
                 reset_recommendations
