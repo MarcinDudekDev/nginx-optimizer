@@ -593,16 +593,24 @@ extract_all_sites() {
 
             # Server block ended
             if (brace_depth <= 0 && $0 ~ /\}/) {
-                # Output all collected server_name values for this block
+                # Output PRIMARY server_name only (first non-www domain)
                 if (server_names != "" && current_file != "") {
                     ssl_status = has_ssl ? "ssl" : "http"
 
-                    # Split server_names and output each
+                    # Split server_names and find primary (first non-www, or first if all are www)
                     split(server_names, final_names, /[[:space:]]+/)
-                    for (i in final_names) {
-                        if (final_names[i] != "") {
-                            print final_names[i] "|" current_file "|" ssl_status
+                    primary = ""
+                    for (i = 1; i <= length(final_names); i++) {
+                        name = final_names[i]
+                        if (name != "") {
+                            # Prefer non-www as primary
+                            if (primary == "" || (primary ~ /^www\./ && name !~ /^www\./)) {
+                                primary = name
+                            }
                         }
+                    }
+                    if (primary != "") {
+                        print primary "|" current_file "|" ssl_status
                     }
                 }
 
