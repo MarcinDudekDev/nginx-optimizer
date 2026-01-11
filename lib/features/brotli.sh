@@ -70,14 +70,23 @@ feature_detect_custom_brotli() {
         fi
     fi
 
-    # Check nginx main config for gzip
+    # Check nginx main config for gzip - use helper if available
     local nginx_conf
-    for conf in /etc/nginx/nginx.conf /usr/local/etc/nginx/nginx.conf /opt/homebrew/etc/nginx/nginx.conf; do
-        if [[ -f "$conf" ]] && grep -qE "gzip[[:space:]]+on" "$conf" 2>/dev/null; then
-            LAST_DIRECTIVE_SOURCE="$conf"
+    if type -t get_nginx_main_conf &>/dev/null; then
+        nginx_conf=$(get_nginx_main_conf)
+        if [[ -f "$nginx_conf" ]] && grep -qE "gzip[[:space:]]+on" "$nginx_conf" 2>/dev/null; then
+            LAST_DIRECTIVE_SOURCE="$nginx_conf"
             return 0
         fi
-    done
+    else
+        # Fallback to hardcoded paths
+        for conf in /etc/nginx/nginx.conf /usr/local/etc/nginx/nginx.conf /opt/homebrew/etc/nginx/nginx.conf; do
+            if [[ -f "$conf" ]] && grep -qE "gzip[[:space:]]+on" "$conf" 2>/dev/null; then
+                LAST_DIRECTIVE_SOURCE="$conf"
+                return 0
+            fi
+        done
+    fi
 
     return 1
 }

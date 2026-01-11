@@ -110,7 +110,15 @@ _version_gte() {
 # Inject HTTP/3 into system nginx sites
 _http3_inject_system_nginx() {
     local target_site="$1"
-    local sites_dir="${2:-/etc/nginx/sites-enabled}"
+    local sites_dir="$2"
+
+    # Use helper if available, fallback to default
+    if [ -z "$sites_dir" ]; then
+        if type -t find_nginx_dir &>/dev/null; then
+            sites_dir=$(find_nginx_dir "sites-enabled")
+        fi
+        sites_dir="${sites_dir:-/etc/nginx/sites-enabled}"
+    fi
 
     # Check if reuseport already configured globally
     local reuseport_exists=false
@@ -198,18 +206,23 @@ _http3_inject_system_nginx() {
 # Configure HTTP/3 for wp-test site
 _http3_configure_wptest() {
     local target_site="$1"
-    local wp_test_sites="${WP_TEST_SITES:-$HOME/.wp-test/sites}"
-    local wp_test_nginx="${WP_TEST_NGINX:-$HOME/.wp-test/nginx}"
 
-    if [ -n "$target_site" ]; then
-        _http3_configure_wptest_site "$target_site"
+    # Use helper if available
+    if type -t iterate_wptest_sites &>/dev/null; then
+        iterate_wptest_sites "_http3_configure_wptest_site" "$target_site"
     else
-        for site_dir in "$wp_test_sites"/*; do
-            [ -d "$site_dir" ] || continue
-            local site
-            site=$(basename "$site_dir")
-            _http3_configure_wptest_site "$site"
-        done
+        # Fallback to manual iteration
+        local wp_test_sites="${WP_TEST_SITES:-$HOME/.wp-test/sites}"
+        if [ -n "$target_site" ]; then
+            _http3_configure_wptest_site "$target_site"
+        else
+            for site_dir in "$wp_test_sites"/*; do
+                [ -d "$site_dir" ] || continue
+                local site
+                site=$(basename "$site_dir")
+                _http3_configure_wptest_site "$site"
+            done
+        fi
     fi
 }
 

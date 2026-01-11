@@ -80,20 +80,25 @@ feature_apply_custom_redis() {
         return $?
     fi
 
-    # wp-test mode (Docker)
+    # wp-test mode (Docker) - use helper if available
     if command -v docker &>/dev/null; then
-        local wp_test_sites="${WP_TEST_SITES:-$HOME/.wp-test/sites}"
-        if [ -d "$wp_test_sites" ]; then
-            if [ -n "$target_site" ] && [ -d "$wp_test_sites/$target_site" ]; then
-                _redis_apply_site "$target_site"
-            elif [ -z "$target_site" ]; then
-                for site_dir in "$wp_test_sites"/*; do
-                    if [ -d "$site_dir" ]; then
-                        local site
-                        site=$(basename "$site_dir")
-                        _redis_apply_site "$site"
-                    fi
-                done
+        if type -t iterate_wptest_sites &>/dev/null; then
+            iterate_wptest_sites "_redis_apply_site" "$target_site"
+        else
+            # Fallback to manual iteration
+            local wp_test_sites="${WP_TEST_SITES:-$HOME/.wp-test/sites}"
+            if [ -d "$wp_test_sites" ]; then
+                if [ -n "$target_site" ] && [ -d "$wp_test_sites/$target_site" ]; then
+                    _redis_apply_site "$target_site"
+                elif [ -z "$target_site" ]; then
+                    for site_dir in "$wp_test_sites"/*; do
+                        if [ -d "$site_dir" ]; then
+                            local site
+                            site=$(basename "$site_dir")
+                            _redis_apply_site "$site"
+                        fi
+                    done
+                fi
             fi
         fi
     fi

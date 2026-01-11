@@ -214,13 +214,25 @@ _fastcgi_deploy_system() {
         local dst="${snippets_dir}/fastcgi-cache.conf"
 
         if [ -f "$src" ]; then
+            # Create directory with sudo if needed
             if [ -w "$(dirname "$snippets_dir")" ]; then
                 mkdir -p "$snippets_dir" 2>/dev/null
-                cp "$src" "$dst" 2>/dev/null
             else
                 sudo mkdir -p "$snippets_dir" 2>/dev/null
-                sudo cp "$src" "$dst" 2>/dev/null
             fi
+
+            # Use smart_copy helper if available
+            if type -t smart_copy &>/dev/null; then
+                smart_copy "$src" "$dst"
+            else
+                # Fallback to inline sudo logic
+                if [ -w "$snippets_dir" ]; then
+                    cp "$src" "$dst" 2>/dev/null
+                else
+                    sudo cp "$src" "$dst" 2>/dev/null
+                fi
+            fi
+
             if [ -f "$dst" ]; then
                 if type -t ui_step_path &>/dev/null; then
                     ui_step_path "Created config" "snippets/fastcgi-cache.conf"
@@ -246,9 +258,9 @@ _fastcgi_deploy_confd() {
     local src="${template_dir}/fastcgi-cache-zone.conf"
     local confd_dir
 
-    # Get cross-platform conf.d directory
-    if type -t get_nginx_confd_dir &>/dev/null; then
-        confd_dir=$(get_nginx_confd_dir)
+    # Get cross-platform conf.d directory - use helper if available
+    if type -t find_nginx_dir &>/dev/null; then
+        confd_dir=$(find_nginx_dir "conf.d")
     fi
     if [ -z "$confd_dir" ]; then
         # Fallback detection
@@ -272,13 +284,25 @@ _fastcgi_deploy_confd() {
     fi
 
     if [ -f "$src" ]; then
+        # Create directory with sudo if needed
         if [ -w "$confd_dir" ]; then
             mkdir -p "$confd_dir" 2>/dev/null
-            cp "$src" "$dst" 2>/dev/null
         else
             sudo mkdir -p "$confd_dir" 2>/dev/null
-            sudo cp "$src" "$dst" 2>/dev/null
         fi
+
+        # Use smart_copy helper if available
+        if type -t smart_copy &>/dev/null; then
+            smart_copy "$src" "$dst"
+        else
+            # Fallback to inline sudo logic
+            if [ -w "$confd_dir" ]; then
+                cp "$src" "$dst" 2>/dev/null
+            else
+                sudo cp "$src" "$dst" 2>/dev/null
+            fi
+        fi
+
         if [ -f "$dst" ]; then
             if type -t ui_step_path &>/dev/null; then
                 ui_step_path "Deployed config" "conf.d/fastcgi-cache-zone.conf"
@@ -294,10 +318,10 @@ _fastcgi_deploy_confd() {
 _fastcgi_inject_system() {
     local target_site="$1"
 
-    # Get cross-platform sites directory
+    # Get cross-platform sites directory - use helper if available
     local sites_dir
-    if type -t get_nginx_sites_dir &>/dev/null; then
-        sites_dir=$(get_nginx_sites_dir)
+    if type -t find_nginx_dir &>/dev/null; then
+        sites_dir=$(find_nginx_dir "sites-enabled")
     fi
     if [ -z "$sites_dir" ]; then
         for dir in /etc/nginx/sites-enabled /opt/homebrew/etc/nginx/sites-enabled /usr/local/etc/nginx/sites-enabled; do
@@ -388,7 +412,6 @@ _fastcgi_inject_system() {
 # Deploy to wp-test sites
 _fastcgi_deploy_wptest() {
     local target_site="$1"
-    local wp_test_sites="${WP_TEST_SITES:-$HOME/.wp-test/sites}"
     local wp_test_nginx="${WP_TEST_NGINX:-$HOME/.wp-test/nginx}"
 
     # Deploy template to wp-test conf.d
@@ -398,23 +421,29 @@ _fastcgi_deploy_wptest() {
         _fastcgi_deploy_wptest_confd
     fi
 
-    # Configure individual sites
-    if [ -n "$target_site" ] && [ -d "$wp_test_sites/$target_site" ]; then
-        _fastcgi_configure_wptest_site "$target_site"
-        if type -t ui_step_path &>/dev/null; then
-            ui_step_path "Configured site" "$target_site"
-        fi
+    # Configure individual sites - use helper if available
+    if type -t iterate_wptest_sites &>/dev/null; then
+        iterate_wptest_sites "_fastcgi_configure_wptest_site" "$target_site"
     else
-        for site_dir in "$wp_test_sites"/*; do
-            if [ -d "$site_dir" ]; then
-                local site
-                site=$(basename "$site_dir")
-                _fastcgi_configure_wptest_site "$site"
-                if type -t ui_step_path &>/dev/null; then
-                    ui_step_path "Configured site" "$site"
-                fi
+        # Fallback to manual iteration
+        local wp_test_sites="${WP_TEST_SITES:-$HOME/.wp-test/sites}"
+        if [ -n "$target_site" ] && [ -d "$wp_test_sites/$target_site" ]; then
+            _fastcgi_configure_wptest_site "$target_site"
+            if type -t ui_step_path &>/dev/null; then
+                ui_step_path "Configured site" "$target_site"
             fi
-        done
+        else
+            for site_dir in "$wp_test_sites"/*; do
+                if [ -d "$site_dir" ]; then
+                    local site
+                    site=$(basename "$site_dir")
+                    _fastcgi_configure_wptest_site "$site"
+                    if type -t ui_step_path &>/dev/null; then
+                        ui_step_path "Configured site" "$site"
+                    fi
+                fi
+            done
+        fi
     fi
 
     return 0
@@ -466,4 +495,3 @@ EOF
 ################################################################################
 
 feature_register
-
