@@ -187,37 +187,25 @@ check_prerequisites() {
     done
 
     if [ ${#missing[@]} -gt 0 ]; then
-        log_error "Missing prerequisites: ${missing[*]}"
-        log_error "Install with: brew install ${missing[*]} (macOS) or apt install ${missing[*]} (Linux)"
-        exit 1
-    fi
-
-    # Check nginx (optional since might be Docker-only)
-    if ! command -v nginx &>/dev/null && ! command -v docker &>/dev/null; then
-        log_warn "Neither nginx nor docker found. Limited functionality."
-    fi
-
-    log_success "All prerequisites satisfied"
-}
-
-# Quiet version for clean UI mode
-check_prerequisites_quiet() {
-    local missing=()
-
-    for cmd in rsync curl jq; do
-        if ! command -v "$cmd" &>/dev/null; then
-            missing+=("$cmd")
+        if [ "${QUIET:-false}" = true ]; then
+            echo -e "  ${RED}Missing:${NC} ${missing[*]}"
+        else
+            log_error "Missing prerequisites: ${missing[*]}"
         fi
-    done
-
-    if [ ${#missing[@]} -gt 0 ]; then
-        echo -e "  ${RED}Missing:${NC} ${missing[*]}"
         echo -e "  Install: brew install ${missing[*]} (macOS) or apt install ${missing[*]} (Linux)"
         exit 1
     fi
 
-    # Log to file only
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Prerequisites OK" >> "${LOG_FILE}"
+    if [ "${QUIET:-false}" = true ]; then
+        # Log to file only in quiet mode
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Prerequisites OK" >> "${LOG_FILE}"
+    else
+        # Check nginx (optional since might be Docker-only)
+        if ! command -v nginx &>/dev/null && ! command -v docker &>/dev/null; then
+            log_warn "Neither nginx nor docker found. Limited functionality."
+        fi
+        log_success "All prerequisites satisfied"
+    fi
 }
 
 source_libraries() {
@@ -853,7 +841,7 @@ main() {
     fi
 
     # Check prerequisites and load libraries (quiet for clean UI)
-    check_prerequisites_quiet
+    QUIET=true check_prerequisites
     source_libraries
 
     # Execute command
