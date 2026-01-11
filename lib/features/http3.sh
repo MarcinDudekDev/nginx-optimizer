@@ -56,8 +56,8 @@ feature_apply_custom_http3() {
         fi
     fi
 
-    # Deploy template using core function
-    if type -t template_deploy &>/dev/null; then
+    # Deploy template using core function (if template is defined)
+    if [ -n "${FEATURE_TEMPLATE:-}" ] && type -t template_deploy &>/dev/null; then
         template_deploy "$FEATURE_TEMPLATE" "$FEATURE_TEMPLATE_CONTEXT" "$target_site"
     fi
 
