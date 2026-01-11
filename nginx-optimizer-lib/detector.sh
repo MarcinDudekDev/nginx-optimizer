@@ -1610,17 +1610,17 @@ show_recommendations() {
             cmd_feature=$(get_feature_by_number "$selection")
         fi
 
-        # Build common flags to preserve context
-        local common_flags=""
-        [ "${SYSTEM_ONLY:-false}" = true ] && common_flags="$common_flags --system-only"
-        [ -n "${TARGET_SITE:-}" ] && common_flags="$common_flags $TARGET_SITE"
+        # Build common flags to preserve context (array for shellcheck compliance)
+        local -a common_flags=()
+        [ "${SYSTEM_ONLY:-false}" = true ] && common_flags+=("--system-only")
+        [ -n "${TARGET_SITE:-}" ] && common_flags+=("$TARGET_SITE")
 
         # First show dry-run preview
         echo ""
         if [ -n "$cmd_feature" ]; then
-            ./nginx-optimizer.sh optimize --feature "$cmd_feature" --dry-run $common_flags 2>&1 || true
+            ./nginx-optimizer.sh optimize --feature "$cmd_feature" --dry-run "${common_flags[@]}" 2>&1 || true
         else
-            ./nginx-optimizer.sh optimize --dry-run $common_flags 2>&1 || true
+            ./nginx-optimizer.sh optimize --dry-run "${common_flags[@]}" 2>&1 || true
         fi
 
         # Ask to apply for real
@@ -1634,9 +1634,9 @@ show_recommendations() {
             y|Y)
                 echo ""
                 if [ -n "$cmd_feature" ]; then
-                    ./nginx-optimizer.sh optimize --feature "$cmd_feature" --force $common_flags 2>&1 || true
+                    ./nginx-optimizer.sh optimize --feature "$cmd_feature" --force "${common_flags[@]}" 2>&1 || true
                 else
-                    ./nginx-optimizer.sh optimize --force $common_flags 2>&1 || true
+                    ./nginx-optimizer.sh optimize --force "${common_flags[@]}" 2>&1 || true
                 fi
 
                 # Re-analyze after applying
