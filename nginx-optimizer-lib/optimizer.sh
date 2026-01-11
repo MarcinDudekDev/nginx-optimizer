@@ -639,7 +639,8 @@ inject_server_includes() {
         for ((i=0; i<${#files_to_modify[@]}; i++)); do
             local original="${files_to_modify[$i]}"
             local temp="${temp_files[$i]}"
-            local backup_file="${backup_dir}/$(basename "$original")"
+            local backup_file
+            backup_file="${backup_dir}/$(basename "$original")"
             backup_files+=("$backup_file")
 
             if [ "$use_sudo" = true ]; then
