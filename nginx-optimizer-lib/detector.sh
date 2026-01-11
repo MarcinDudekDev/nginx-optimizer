@@ -626,6 +626,68 @@ check_directive_for_site() {
     return 1
 }
 
+################################################################################
+# Registry Adapter Functions
+################################################################################
+# These functions provide a bridge between the old check_*_enabled() functions
+# and the new plugin registry in lib/registry.sh. Allows gradual migration.
+
+# registry_detect_feature - Detect feature using the new registry system
+# Args: $1 = feature_id (e.g., "http3", "brotli")
+#       $2 = config_file
+#       $3 = site_name (optional)
+# Returns: 0 if feature is enabled, 1 if not
+# Sets: LAST_DIRECTIVE_SOURCE (for compatibility with old system)
+registry_detect_feature() {
+    local feature_id="$1"
+    local config_file="$2"
+    local site_name="${3:-}"
+
+    # Check if registry is loaded
+    if ! type -t feature_detect &>/dev/null; then
+        # Registry not loaded, fall back to returning 1 (not found)
+        # This allows the system to work even if lib/ isn't loaded
+        return 1
+    fi
+
+    # Call registry's feature_detect
+    if feature_detect "$feature_id" "$config_file" "$site_name"; then
+        return 0
+    fi
+
+    return 1
+}
+
+# registry_get_feature_display - Get display name for a feature
+# Args: $1 = feature_id
+# Returns: display name string
+registry_get_feature_display() {
+    local feature_id="$1"
+
+    if ! type -t feature_get &>/dev/null; then
+        echo "$feature_id"
+        return
+    fi
+
+    local display
+    display=$(feature_get "$feature_id" "display" 2>/dev/null)
+    if [ -n "$display" ]; then
+        echo "$display"
+    else
+        echo "$feature_id"
+    fi
+}
+
+# registry_list_features - List all registered features
+# Returns: newline-separated list of feature IDs
+registry_list_features() {
+    if ! type -t feature_list &>/dev/null; then
+        return 1
+    fi
+
+    feature_list
+}
+
 # Initialize site filtering for a specific site
 # Args: $1 = site name
 init_site_filtering() {

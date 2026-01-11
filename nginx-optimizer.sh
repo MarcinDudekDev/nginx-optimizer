@@ -234,6 +234,32 @@ source_libraries() {
             log_warn "Library not found: ${lib}.sh (will create on first run)"
         fi
     done
+
+    # Source new plugin architecture (lib/)
+    # Order matters: registry first, then core modules, then features
+    local new_lib_dir="${SCRIPT_DIR}/lib"
+
+    # 1. Registry (provides feature_register, feature_detect, etc.)
+    if [ -f "${new_lib_dir}/registry.sh" ]; then
+        # shellcheck source=/dev/null
+        source "${new_lib_dir}/registry.sh"
+    fi
+
+    # 2. Core modules (templates, etc.)
+    for core_lib in "${new_lib_dir}"/core/*.sh; do
+        if [ -f "$core_lib" ]; then
+            # shellcheck source=/dev/null
+            source "$core_lib"
+        fi
+    done
+
+    # 3. Feature modules (each calls feature_register)
+    for feature_lib in "${new_lib_dir}"/features/*.sh; do
+        if [ -f "$feature_lib" ]; then
+            # shellcheck source=/dev/null
+            source "$feature_lib"
+        fi
+    done
 }
 
 ################################################################################
