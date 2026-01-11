@@ -1914,7 +1914,8 @@ security|Security Headers|0|security
 rate-limiting|Rate Limiting|0|security
 wordpress|WordPress Exclusions|0|wordpress
 ocsp|OCSP Stapling|1|security
-www-ssl|WWW in SSL Block|0|www-ssl"
+www-ssl|WWW in SSL Block|0|www-ssl
+opcache|PHP OpCache|1|opcache"
 
 # Record a missing feature for a site
 # Args: $1 = feature name, $2 = site name
