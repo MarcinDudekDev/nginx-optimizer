@@ -148,7 +148,7 @@ _security_apply_wptest() {
         echo "" >> "$temp_file"
         cat "$site_file" >> "$temp_file"
         mv "$temp_file" "$site_file"
-        ((updated++))
+        updated=$((updated + 1))
     done
 
     if [ "$updated" -gt 0 ]; then

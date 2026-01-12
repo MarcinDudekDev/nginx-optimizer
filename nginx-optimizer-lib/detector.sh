@@ -1520,7 +1520,7 @@ show_recommendations() {
     [ -z "$MISSING_FEATURES" ] && return 0
 
     # Non-interactive mode - display menu but don't prompt
-    if [ "${QUIET:-}" = "true" ] || [ ! -t 1 ]; then
+    if [ "${QUIET:-}" = "true" ] || [ ! -t 0 ]; then
         local menu_output
         menu_output=$(display_recommendations_menu)
         # Print menu without the count line (last line is rec_count)

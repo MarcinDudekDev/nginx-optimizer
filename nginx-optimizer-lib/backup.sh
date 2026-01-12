@@ -414,7 +414,7 @@ cleanup_old_backups() {
     # Count backups safely
     local backup_count=0
     while IFS= read -r -d '' _; do
-        ((backup_count++))
+        backup_count=$((backup_count + 1))
     done < <(find "$BACKUP_DIR" -maxdepth 1 -mindepth 1 -type d -print0)
 
     if [ "$backup_count" -le "$keep_count" ]; then

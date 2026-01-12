@@ -88,29 +88,38 @@ LOCK_FILE="${DATA_DIR}/nginx-optimizer.lock"
 
 acquire_lock() {
     # Portable lock using mkdir (atomic on all platforms)
-    if ! mkdir "$LOCK_FILE" 2>/dev/null; then
-        # Check if stale lock (process not running)
+    local max_attempts=3
+    local attempt=0
+
+    while [ $attempt -lt $max_attempts ]; do
+        if mkdir "$LOCK_FILE" 2>/dev/null; then
+            # Got the lock - store PID immediately
+            echo $$ > "$LOCK_FILE/pid"
+            return 0
+        fi
+
+        # Lock exists - check if stale
         if [ -f "$LOCK_FILE/pid" ]; then
             local old_pid
-            old_pid=$(cat "$LOCK_FILE/pid" 2>/dev/null)
+            old_pid=$(cat "$LOCK_FILE/pid" 2>/dev/null || true)
             if [ -n "$old_pid" ] && ! kill -0 "$old_pid" 2>/dev/null; then
-                # Stale lock, remove and retry
-                rm -rf "$LOCK_FILE"
-                mkdir "$LOCK_FILE" 2>/dev/null || {
-                    log_error "Another instance is running (lock: $LOCK_FILE)"
-                    exit 1
-                }
-            else
-                log_error "Another instance is running (lock: $LOCK_FILE)"
-                exit 1
+                # Stale lock - atomically rename before cleanup to prevent race
+                local stale_name="${LOCK_FILE}.stale.$$"
+                if mv "$LOCK_FILE" "$stale_name" 2>/dev/null; then
+                    rm -rf "$stale_name" &  # Background cleanup
+                    attempt=$((attempt + 1))
+                    continue  # Retry mkdir
+                fi
             fi
-        else
-            log_error "Another instance is running (lock: $LOCK_FILE)"
-            exit 1
         fi
-    fi
-    # Store our PID for stale lock detection
-    echo $$ > "$LOCK_FILE/pid"
+
+        # Lock held by active process
+        log_error "Another instance is running (lock: $LOCK_FILE)"
+        exit 1
+    done
+
+    log_error "Could not acquire lock after $max_attempts attempts"
+    exit 1
 }
 
 release_lock() {

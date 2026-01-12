@@ -397,7 +397,7 @@ _fastcgi_inject_system() {
             if type -t ui_step_path &>/dev/null; then
                 ui_step_path "Configured site" "$(basename "$site_conf")"
             fi
-            ((injected++))
+            injected=$((injected + 1))
         fi
         rm -f "$temp_file"
     done
