@@ -222,6 +222,29 @@ feature_list_all() {
     done <<< "$(echo "$REGISTERED_FEATURES" | tr '|' '\n')"
 }
 
+# feature_list_for_menu - List features for recommendation menu
+# Prints: "id|display_name|is_global|cli_id" per line
+# Used by detector.sh to build recommendations menu
+feature_list_for_menu() {
+    [[ -z "$REGISTERED_FEATURES" ]] && return 0
+
+    local entry
+    while IFS='|' read -r entry; do
+        [[ -z "$entry" ]] && continue
+        local id display scope is_global
+        id=$(_get_field "$entry" "$FIELD_ID")
+        display=$(_get_field "$entry" "$FIELD_DISPLAY")
+        scope=$(_get_field "$entry" "$FIELD_SCOPE")
+        # Convert scope to is_global (1 if global, 0 otherwise)
+        if [[ "$scope" == "global" ]]; then
+            is_global=1
+        else
+            is_global=0
+        fi
+        echo "${id}|${display}|${is_global}|${id}"
+    done <<< "$(echo "$REGISTERED_FEATURES" | tr '|' '\n')"
+}
+
 ################################################################################
 # Detection and Application
 ################################################################################

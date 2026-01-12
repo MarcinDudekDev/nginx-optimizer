@@ -1425,16 +1425,24 @@ TOTAL_SITES_ANALYZED=0
 # shellcheck disable=SC2034  # Reserved for future use (site tracking)
 ALL_SITES_LIST=""
 
-# Feature metadata: feature_name|display_name|is_global|cli_feature
-FEATURE_META="http3|HTTP/3 QUIC|0|http3
-fastcgi-cache|FastCGI Cache|0|fastcgi-cache
-brotli|Compression|1|brotli
-security|Security Headers|0|security
-rate-limiting|Rate Limiting|0|security
-wordpress|WordPress Exclusions|0|wordpress
-ocsp|OCSP Stapling|1|security
-www-ssl|WWW in SSL Block|0|www-ssl
-opcache|PHP OpCache|1|opcache"
+# Get feature menu data from registry (dynamic, not hardcoded)
+# Falls back to static list if registry not available
+# Format: feature_name|display_name|is_global|cli_feature
+get_feature_menu_data() {
+    # Try to get from registry first
+    if type -t feature_list_for_menu &>/dev/null; then
+        feature_list_for_menu
+    else
+        # Fallback: static list (should not happen if registry loaded)
+        echo "http3|HTTP/3 QUIC|0|http3"
+        echo "fastcgi-cache|FastCGI Cache|0|fastcgi-cache"
+        echo "brotli|Compression|1|brotli"
+        echo "security|Security Headers|0|security"
+        echo "wordpress|WordPress Exclusions|0|wordpress"
+        echo "opcache|PHP OpCache|1|opcache"
+        echo "redis|Redis Object Cache|1|redis"
+    fi
+}
 
 # Record a missing feature for a site
 # Args: $1 = feature name, $2 = site name
@@ -1493,7 +1501,7 @@ display_recommendations_menu() {
             echo -e "  ${GREEN}${rec_count}${NC}  ${display_name}"
             echo -e "      ${site_list}"
         fi
-    done <<< "$FEATURE_META"
+    done <<< "$(get_feature_menu_data)"
 
     echo "$rec_count"  # Return count via stdout capture
 }
@@ -1513,7 +1521,7 @@ get_feature_by_number() {
             echo "$cli_feature"
             return 0
         fi
-    done <<< "$FEATURE_META"
+    done <<< "$(get_feature_menu_data)"
 }
 
 show_recommendations() {
