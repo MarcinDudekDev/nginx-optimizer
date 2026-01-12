@@ -122,8 +122,7 @@ create_backup() {
         local compose_count=0
         for site_dir in "$WP_TEST_SITES"/*; do
             if [ -d "$site_dir" ] && [ -f "$site_dir/docker-compose.yml" ]; then
-                local site_name
-                site_name=$(basename "$site_dir")
+                local site_name="${site_dir##*/}"
                 cp "$site_dir/docker-compose.yml" "${CURRENT_BACKUP_DIR}/docker-compose-files/${site_name}.yml"
                 compose_count=$((compose_count + 1))
             fi
@@ -251,7 +250,7 @@ if [ -d "$BACKUP_DIR/docker-compose-files" ]; then
     echo "Restoring docker-compose.yml files..."
     for compose_file in "$BACKUP_DIR/docker-compose-files"/*.yml; do
         if [ -f "$compose_file" ]; then
-            site_name=$(basename "$compose_file" .yml)
+            site_name="${compose_file##*/}"; site_name="${site_name%.yml}"
             target_dir="$HOME/.wp-test/sites/$site_name"
             if [ -d "$target_dir" ]; then
                 echo "  Restoring docker-compose.yml for $site_name"
@@ -438,7 +437,7 @@ cleanup_old_backups() {
         sort -n | \
         head -n "$delete_count" | \
         while IFS=' ' read -r mtime backup_path; do
-            log_info "Removing old backup: $(basename "$backup_path")"
+            log_info "Removing old backup: ${backup_path##*/}"
             rm -rf "$backup_path"
         done
 
@@ -483,8 +482,7 @@ list_backups() {
     printf '%s\n' "${backups_with_mtime[@]}" | \
         sort -rn | \
         while IFS=' ' read -r mtime backup_path; do
-            local backup
-            backup=$(basename "$backup_path")
+            local backup="${backup_path##*/}"
             local metadata_file="${backup_path}/backup-metadata.json"
 
             echo "  Backup: $backup"

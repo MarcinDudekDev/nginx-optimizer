@@ -468,7 +468,8 @@ build_site_filter_cache() {
     ' "$config_file")
 
     [ "$config_file" != "$PARSED_CONFIG_CACHE" ] && rm -f "$config_file"
-    SITE_FILTER_CACHE_BUILT=true
+    # Only mark as built if we actually got cache data
+    [ -n "$SITE_FILTER_CACHE" ] && SITE_FILTER_CACHE_BUILT=true
 }
 
 # Get cached site files (instant lookup)
