@@ -24,8 +24,6 @@ FEATURE_TEMPLATE_CONTEXT="server"
 FEATURE_ALIASES="quic"
 FEATURE_NGINX_MIN_VERSION="1.25"
 FEATURE_PREREQ_CHECK=""
-FEATURE_HAS_CUSTOM_DETECT="0"
-FEATURE_HAS_CUSTOM_APPLY="1"
 
 ################################################################################
 # Custom Apply Logic

@@ -34,19 +34,6 @@ DIRECTIVE_LOOKUP_CACHE=""
 FEATURE_CACHE=""
 FEATURE_CACHE_BUILT=false
 
-# Feature patterns to detect (feature_name:regex)
-# shellcheck disable=SC2034  # Reserved for future dynamic pattern matching
-FEATURE_PATTERNS="http3:listen.*quic
-fastcgi_cache:fastcgi_cache[^_]
-brotli:brotli on
-gzip:gzip on
-security_headers:Strict-Transport-Security
-rate_limiting:limit_req
-wordpress:xmlrpc
-ocsp:ssl_stapling on
-tls13:TLSv1.3
-tls12:TLSv1.2"
-
 ################################################################################
 # Initialization & Cleanup
 ################################################################################

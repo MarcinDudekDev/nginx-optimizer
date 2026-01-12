@@ -83,15 +83,8 @@ is_safe_config_file() {
 
 ################################################################################
 # Environment Detection Helpers (DRY)
+# Note: has_system_nginx, has_wptest_sites, has_docker_wptest are in lib/core/templates.sh
 ################################################################################
-
-# Check if system nginx is installed and has sites-enabled
-# Supports Linux, Homebrew Intel, and Homebrew Apple Silicon
-has_system_nginx() {
-    local sites_dir
-    sites_dir=$(get_nginx_sites_dir)
-    [ -n "$sites_dir" ] && [ -d "$sites_dir" ] && [ -n "$(ls -A "$sites_dir" 2>/dev/null)" ]
-}
 
 # Get the nginx sites-enabled directory (cross-platform)
 get_nginx_sites_dir() {
@@ -131,16 +124,6 @@ get_nginx_snippets_dir() {
         fi
     done
     return 1
-}
-
-# Check if wp-test sites exist
-has_wptest_sites() {
-    [ -d "$WP_TEST_SITES" ] && [ -n "$(ls -A "$WP_TEST_SITES" 2>/dev/null)" ]
-}
-
-# Check if Docker wp-test proxy is running
-has_docker_wptest() {
-    command -v docker &>/dev/null && docker ps --format "{{.Names}}" 2>/dev/null | grep -q "wp-test-proxy"
 }
 
 # Get list of system nginx sites (basenames only, cross-platform)

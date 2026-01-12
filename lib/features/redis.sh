@@ -24,8 +24,6 @@ FEATURE_TEMPLATE_CONTEXT=""
 FEATURE_ALIASES=""
 FEATURE_NGINX_MIN_VERSION=""
 FEATURE_PREREQ_CHECK=""
-FEATURE_HAS_CUSTOM_DETECT="1"
-FEATURE_HAS_CUSTOM_APPLY="1"
 
 ################################################################################
 # Custom Detection
