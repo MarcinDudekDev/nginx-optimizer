@@ -1282,6 +1282,7 @@ analyze_wp_test_site() {
 
 analyze_optimizations() {
     local target_site="$1"
+    local skip_recommendations="${2:-false}"
 
     # Check analysis cache (unless --no-cache or targeting specific site)
     if [ "${NO_CACHE:-false}" != "true" ] && [ -z "$target_site" ]; then
@@ -1407,8 +1408,10 @@ analyze_optimizations() {
         save_analysis_cache "$CACHED_CONFIG_HASH"
     fi
 
-    # Show recommendations and optionally apply
-    show_recommendations
+    # Show recommendations and optionally apply (unless skipped for refresh)
+    if [ "$skip_recommendations" != "true" ]; then
+        show_recommendations
+    fi
 }
 
 # Global score counters
@@ -1563,11 +1566,11 @@ show_recommendations() {
             r|R|refresh|reanalyze)
                 echo ""
                 log_info "Re-analyzing configurations..."
-                # Clear cache and re-run full analysis
+                # Clear cache and re-run analysis (skip recommendations to avoid nesting)
                 NO_CACHE=true
                 MISSING_FEATURES=""
                 reset_recommendations
-                analyze_optimizations ""
+                analyze_optimizations "" true
                 continue
                 ;;
             "")
@@ -1621,17 +1624,8 @@ show_recommendations() {
                 else
                     ./nginx-optimizer.sh optimize --force "${common_flags[@]}" 2>&1 || true
                 fi
-
-                # Re-analyze after applying
                 echo ""
-                echo -e "  ${CYAN}Re-analyzing to update status...${NC}"
-                NO_CACHE=true
-                MISSING_FEATURES=""
-                reset_recommendations
-                analyze_optimizations ""
-
-                echo ""
-                read -r -p "  Press Enter to continue..."
+                echo -e "  ${CYAN}Press 'r' to refresh status, or select another option${NC}"
                 ;;
             *)
                 # N or empty - just go back to menu
