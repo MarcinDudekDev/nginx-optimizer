@@ -16,7 +16,7 @@ fi
 ################################################################################
 
 FEATURE_ID="brotli"
-FEATURE_DISPLAY="Brotli Compression"
+FEATURE_DISPLAY="Compression"
 FEATURE_DETECT_PATTERN="brotli on"
 FEATURE_SCOPE="global"
 FEATURE_TEMPLATE="compression.conf"

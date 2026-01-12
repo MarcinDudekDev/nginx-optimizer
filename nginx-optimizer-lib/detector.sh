@@ -1036,22 +1036,6 @@ detect_all_features_for_site() {
         fi
     done <<< "$(feature_list_all)"
 
-    # Handle features not yet in registry
-    # Gzip - can be global
-    if check_feature_for_site "gzip on" "$site_name" "$config_file"; then
-        printf "    ${GREEN}✓${NC} %-22s" "Gzip Compression"
-        if [ -n "$LAST_DIRECTIVE_SOURCE" ]; then
-            echo " ($(format_source_path "$LAST_DIRECTIVE_SOURCE"))"
-        else
-            echo ""
-        fi
-        DETECT_SCORE_ENABLED=$((DETECT_SCORE_ENABLED + 1))
-    else
-        printf "    ${YELLOW}✗${NC} %-22s\n" "Gzip Compression"
-        record_missing_feature "gzip" "$site_name"
-    fi
-    DETECT_SCORE_TOTAL=$((DETECT_SCORE_TOTAL + 1))
-
     # TLS Versions - special display format (no score)
     local tls_versions=""
     if check_feature_for_site "TLSv1.3" "$site_name" "$config_file"; then
@@ -1441,8 +1425,7 @@ ALL_SITES_LIST=""
 # Feature metadata: feature_name|display_name|is_global|cli_feature
 FEATURE_META="http3|HTTP/3 QUIC|0|http3
 fastcgi-cache|FastCGI Cache|0|fastcgi-cache
-brotli|Brotli Compression|1|brotli
-gzip|Gzip Compression|1|compression
+brotli|Compression|1|brotli
 security|Security Headers|0|security
 rate-limiting|Rate Limiting|0|security
 wordpress|WordPress Exclusions|0|wordpress
