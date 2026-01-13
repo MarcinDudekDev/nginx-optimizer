@@ -381,19 +381,27 @@ cmd_analyze() {
         return 0
     fi
 
-    log_info "Analyzing nginx configurations..."
-
-    if [ -n "$TARGET_SITE" ]; then
-        log_info "Target: ${TARGET_SITE}"
+    # Show clean UI header
+    if type -t ui_header &>/dev/null; then
+        ui_header
+        ui_context "Analyzing" "${TARGET_SITE:-All sites}"
+        ui_blank
     else
-        log_info "Target: All sites"
+        log_info "Analyzing nginx configurations..."
+        if [ -n "$TARGET_SITE" ]; then
+            log_info "Target: ${TARGET_SITE}"
+        fi
     fi
 
     if type -t detect_nginx_instances &>/dev/null; then
         detect_nginx_instances "$TARGET_SITE"
         analyze_optimizations "$TARGET_SITE"
     else
-        log_error "Detector library not loaded. Run setup first."
+        if type -t ui_error_box &>/dev/null; then
+            ui_error_box "Detector library not loaded. Run setup first."
+        else
+            log_error "Detector library not loaded. Run setup first."
+        fi
         exit 1
     fi
 }
@@ -484,8 +492,6 @@ EOF
 
 cmd_list() {
     if [ "$JSON_OUTPUT" = true ]; then
-        # Run detection but capture output
-        log_info "Detecting nginx installations..." >> "$LOG_FILE"
         # Minimal JSON - actual detection would need refactoring
         local json_result
         json_result=$(cat <<EOF
@@ -501,12 +507,19 @@ EOF
         return 0
     fi
 
-    log_info "Detecting nginx installations..."
+    # Show clean UI header
+    if type -t ui_header &>/dev/null; then
+        ui_header
+    fi
 
     if type -t list_nginx_instances &>/dev/null; then
         list_nginx_instances
     else
-        log_error "Detector library not loaded"
+        if type -t ui_error_box &>/dev/null; then
+            ui_error_box "Detector library not loaded"
+        else
+            log_error "Detector library not loaded"
+        fi
         exit 1
     fi
 }

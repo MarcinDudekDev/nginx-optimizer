@@ -150,14 +150,22 @@ load_analysis_cache() {
     MISSING_FEATURES=$(sed -n '/^---MISSING---$/,$ p' "$ANALYSIS_CACHE_FILE" | tail -n +2)
     TOTAL_SITES_ANALYZED="$cached_sites"
 
-    # Output cache indicator
-    echo ""
-    echo -e "${CYAN}[CACHED]${NC} Config unchanged (${age_display}, hash: ${current_hash:0:8}...)"
-    echo -e "${CYAN}[CACHED]${NC} Run with --no-cache to force fresh analysis"
-    echo ""
-    echo "═══════════════════════════════════════════════════════════"
-    echo "Summary: $TOTAL_SITES_ANALYZED sites (cached)"
-    echo "═══════════════════════════════════════════════════════════"
+    # Output cache indicator with clean UI
+    if type -t ui_section &>/dev/null; then
+        ui_section "Using cached analysis..."
+        ui_step "Config unchanged" "${age_display}"
+        ui_blank
+        echo -e "  ─────────────────────────────────────────────────────"
+        echo -e "  ${TOTAL_SITES_ANALYZED} site(s) analyzed (use --no-cache to refresh)"
+    else
+        echo ""
+        echo -e "${CYAN}[CACHED]${NC} Config unchanged (${age_display}, hash: ${current_hash:0:8}...)"
+        echo -e "${CYAN}[CACHED]${NC} Run with --no-cache to force fresh analysis"
+        echo ""
+        echo "═══════════════════════════════════════════════════════════"
+        echo "Summary: $TOTAL_SITES_ANALYZED sites (cached)"
+        echo "═══════════════════════════════════════════════════════════"
+    fi
 
     # Show recommendations from cached state
     show_recommendations
@@ -169,7 +177,8 @@ load_analysis_cache() {
 clear_analysis_cache() {
     init_analysis_cache
     rm -f "$ANALYSIS_CACHE_FILE"
-    log_info "Analysis cache cleared"
+    # Silent - only log to file
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Analysis cache cleared" >> "${LOG_FILE:-/dev/null}"
 }
 
 ################################################################################
@@ -188,73 +197,86 @@ get_instance_count() {
 }
 
 detect_system_nginx() {
-    log_info "Checking for system nginx..."
-
     for conf in "${NGINX_LOCATIONS[@]}"; do
         if [ -f "$conf" ]; then
-            log_success "Found system nginx: $conf"
             add_instance "system" "nginx" "$conf"
 
             if command -v nginx &>/dev/null; then
                 local version
                 version=$(nginx -v 2>&1 | sed -n 's/.*nginx\/\([0-9.]*\).*/\1/p')
-                log_info "  Version: $version"
+
+                # Use clean UI if available
+                if type -t ui_step &>/dev/null; then
+                    ui_step "System nginx" "v${version}"
+                else
+                    log_success "Found system nginx: $conf (v${version})"
+                fi
 
                 # Parse full config with nginx -T for source tracking
                 if type -t parse_nginx_config &>/dev/null; then
-                    parse_nginx_config || log_warn "Could not parse nginx -T output"
+                    parse_nginx_config 2>/dev/null || true
+                fi
+            else
+                if type -t ui_step &>/dev/null; then
+                    ui_step "System nginx" "$conf"
+                else
+                    log_success "Found system nginx: $conf"
                 fi
             fi
             return 0
         fi
     done
 
-    log_info "No system nginx found"
     return 1
 }
 
 detect_docker_nginx() {
-    log_info "Checking for Docker nginx containers..."
-
     if ! command -v docker &>/dev/null; then
-        log_info "Docker not installed"
         return 1
     fi
 
     # Check if Docker is running
     if ! docker info &>/dev/null; then
-        log_info "Docker not running"
         return 1
+    fi
+
+    local found=false
+
+    # Check for wp-test-proxy specifically
+    if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "wp-test-proxy"; then
+        add_instance "docker" "wp-test-proxy" "wp-test-proxy"
+        if type -t ui_step &>/dev/null; then
+            ui_step "Docker nginx-proxy" "wp-test"
+        else
+            log_success "Found wp-test nginx-proxy container"
+        fi
+        found=true
     fi
 
     # Check for nginx containers
     local containers
     containers=$(docker ps --filter "ancestor=nginx" --format "{{.Names}}" 2>/dev/null)
 
-    # Also check for wp-test-proxy specifically
-    if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "wp-test-proxy"; then
-        log_success "Found wp-test nginx-proxy container"
-        add_instance "docker" "wp-test-proxy" "wp-test-proxy"
-    fi
-
     if [ -n "$containers" ]; then
         while IFS= read -r container; do
             if [ "$container" != "wp-test-proxy" ]; then
-                log_success "Found Docker nginx: $container"
                 add_instance "docker" "$container" "$container"
+                if type -t ui_step &>/dev/null; then
+                    ui_step "Docker nginx" "$container"
+                else
+                    log_success "Found Docker nginx: $container"
+                fi
+                found=true
             fi
         done <<< "$containers"
-        return 0
     fi
 
+    [ "$found" = true ] && return 0
     return 1
 }
 
 detect_wp_test_sites() {
-    log_info "Checking for wp-test sites..."
-
     if [ ! -d "$WP_TEST_SITES" ]; then
-        log_info "No wp-test sites directory found"
         return 1
     fi
 
@@ -263,39 +285,43 @@ detect_wp_test_sites() {
         if [ -d "$site_dir" ] && [ "$(basename "$site_dir")" != ".DS_Store" ]; then
             local domain
             domain=$(basename "$site_dir")
-            log_success "Found wp-test site: $domain"
             add_instance "wp_test" "$domain" "$site_dir"
             site_count=$((site_count + 1))
         fi
     done
 
     if [ $site_count -eq 0 ]; then
-        log_info "No wp-test sites found"
         return 1
     fi
 
     # Also check for wp-test nginx config
     if [ -f "$WP_TEST_NGINX/proxy.conf" ]; then
-        log_success "Found wp-test nginx config: $WP_TEST_NGINX/proxy.conf"
         add_instance "wp_test_nginx" "proxy" "$WP_TEST_NGINX/proxy.conf"
     fi
 
-    log_success "Found $site_count wp-test site(s)"
+    # Show single summary line
+    if type -t ui_step &>/dev/null; then
+        ui_step "wp-test sites" "${site_count} found"
+    else
+        log_success "Found $site_count wp-test site(s)"
+    fi
     return 0
 }
 
 detect_nginx_instances() {
     local target_site="$1"
 
-    log_info "Scanning for nginx installations..."
-    echo ""
-
     # Reset instances array
     DETECTED_INSTANCES=()
 
     # Initialize parser if available
     if type -t parser_init &>/dev/null; then
-        parser_init || log_warn "Parser initialization failed, using legacy detection"
+        parser_init 2>/dev/null || true
+    fi
+
+    # Show section header
+    if type -t ui_section &>/dev/null; then
+        ui_section "Detecting..."
     fi
 
     if [ -n "$target_site" ]; then
@@ -306,9 +332,17 @@ detect_nginx_instances() {
         # Check if it's a wp-test site
         if [ -d "$WP_TEST_SITES/$target_site" ]; then
             add_instance "wp_test" "$target_site" "$WP_TEST_SITES/$target_site"
-            log_success "Target site found: $target_site"
+            if type -t ui_step &>/dev/null; then
+                ui_step "Target site" "$target_site"
+            else
+                log_success "Target site found: $target_site"
+            fi
         else
-            log_error "Site not found: $target_site"
+            if type -t ui_step_fail &>/dev/null; then
+                ui_step_fail "Site not found" "$target_site"
+            else
+                log_error "Site not found: $target_site"
+            fi
             exit 1
         fi
     else
@@ -317,41 +351,51 @@ detect_nginx_instances() {
         if [ "${SYSTEM_ONLY:-false}" != true ]; then
             detect_docker_nginx || true
             detect_wp_test_sites || true
-        else
-            log_info "Skipping wp-test (--system-only mode)"
         fi
     fi
 
-    echo ""
     local count
     count=$(get_instance_count)
     if [ "$count" -eq 0 ]; then
-        log_warn "No nginx installations detected"
+        if type -t ui_step_fail &>/dev/null; then
+            ui_step_fail "No nginx installations detected"
+        else
+            log_warn "No nginx installations detected"
+        fi
         return 1
     fi
 
-    log_success "Detected $count nginx instance(s)"
     return 0
 }
 
 list_nginx_instances() {
     detect_nginx_instances ""
 
-    echo ""
-    echo "═══════════════════════════════════════════════════════════"
-    echo "Detected NGINX Installations:"
-    echo "═══════════════════════════════════════════════════════════"
-
-    for entry in "${DETECTED_INSTANCES[@]}"; do
-        local type
-        local name
-        local path
-        type=$(echo "$entry" | cut -d: -f1)
-        name=$(echo "$entry" | cut -d: -f2)
-        path=$(echo "$entry" | cut -d: -f3-)
-        echo "  • [$type] $name: $path"
-    done
-    echo ""
+    # Clean UI output
+    if type -t ui_section &>/dev/null; then
+        ui_section "Found installations:"
+        for entry in "${DETECTED_INSTANCES[@]}"; do
+            local type name path
+            type=$(echo "$entry" | cut -d: -f1)
+            name=$(echo "$entry" | cut -d: -f2)
+            path=$(echo "$entry" | cut -d: -f3-)
+            ui_bullet "[$type] $name: $path"
+        done
+        ui_blank
+    else
+        echo ""
+        echo "═══════════════════════════════════════════════════════════"
+        echo "Detected NGINX Installations:"
+        echo "═══════════════════════════════════════════════════════════"
+        for entry in "${DETECTED_INSTANCES[@]}"; do
+            local type name path
+            type=$(echo "$entry" | cut -d: -f1)
+            name=$(echo "$entry" | cut -d: -f2)
+            path=$(echo "$entry" | cut -d: -f3-)
+            echo "  • [$type] $name: $path"
+        done
+        echo ""
+    fi
 }
 
 ################################################################################
@@ -714,8 +758,6 @@ init_site_filtering() {
         return
     fi
 
-    log_info "Initializing site filtering for: $site"
-
     # Use cached lookup (fast) instead of parsing config each time (slow)
     SITE_RELEVANT_FILES=$(get_cached_site_files "$site")
 
@@ -725,11 +767,9 @@ init_site_filtering() {
     fi
 
     if [ -z "$SITE_RELEVANT_FILES" ]; then
-        log_warn "No config files found for site: $site"
         SITE_FILTERING_ACTIVE=false
     else
         SITE_FILTERING_ACTIVE=true
-        log_info "Site filtering active for: $site"
     fi
 }
 
@@ -805,23 +845,20 @@ analyze_docker_container() {
     local container="$1"
 
     if [ -z "$container" ]; then
-        log_error "Container name required"
         return 1
     fi
 
     # Check if container is running
     if ! docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^${container}$"; then
-        log_warn "Container '$container' is not running"
         return 1
     fi
-
-    log_info "Analyzing Docker container: $container"
 
     # Try to get nginx config from container
     local config
     config=$(docker exec "$container" nginx -T 2>/dev/null) || {
-        log_warn "  Could not retrieve nginx config from container"
-        echo -e "    ${YELLOW}⚠ nginx -T failed in container${NC}"
+        if type -t ui_step_fail &>/dev/null; then
+            ui_step_fail "Docker nginx" "nginx -T failed"
+        fi
         return 1
     }
 
@@ -1185,10 +1222,17 @@ analyze_single_site() {
     local site_name="$1"
     local config_file="$2"
 
-    echo ""
-    echo "═══════════════════════════════════════════════════════════"
-    echo "Site: $site_name ($(format_source_path "$config_file"))"
-    echo "═══════════════════════════════════════════════════════════"
+    # Clean UI: site header with box
+    if type -t ui_section &>/dev/null; then
+        ui_blank
+        echo -e "  ${CYAN}${site_name}${NC}"
+        echo -e "  $(format_source_path "$config_file")"
+    else
+        echo ""
+        echo "═══════════════════════════════════════════════════════════"
+        echo "Site: $site_name ($(format_source_path "$config_file"))"
+        echo "═══════════════════════════════════════════════════════════"
+    fi
 
     # Initialize site filtering for this specific site
     init_site_filtering "$site_name"
@@ -1200,85 +1244,6 @@ analyze_single_site() {
     echo ""
     printf "    Score: "
     show_site_score "$DETECT_SCORE_ENABLED" "$DETECT_SCORE_TOTAL"
-    echo ""
-}
-
-# Track already analyzed config files to avoid redundant analysis
-declare -a ANALYZED_FILES=()
-
-is_already_analyzed() {
-    local file="$1"
-    # Handle empty array case for set -u compatibility
-    if [ ${#ANALYZED_FILES[@]} -eq 0 ]; then
-        return 1
-    fi
-    for analyzed in "${ANALYZED_FILES[@]}"; do
-        if [ "$analyzed" = "$file" ]; then
-            return 0
-        fi
-    done
-    return 1
-}
-
-mark_as_analyzed() {
-    local file="$1"
-    ANALYZED_FILES+=("$file")
-}
-
-reset_analyzed_files() {
-    ANALYZED_FILES=()
-}
-
-analyze_wp_test_site() {
-    local site_name="$1"
-    local site_dir="$2"
-
-    # Initialize site filtering if this is a specific site analysis
-    if [ -n "$site_name" ]; then
-        init_site_filtering "$site_name"
-    fi
-
-    if [ "$SITE_FILTERING_ACTIVE" = true ]; then
-        log_info "Analyzing wp-test site: $site_name (filtered view)"
-    else
-        log_info "Analyzing wp-test site: $site_name"
-    fi
-
-    # Check nginx proxy config (only analyze once across all sites)
-    local proxy_conf="${WP_TEST_NGINX}/proxy.conf"
-    if [ -f "$proxy_conf" ]; then
-        if is_already_analyzed "$proxy_conf"; then
-            log_info "  (Proxy config already analyzed above)"
-        else
-            # Only analyze if not filtered OR if this file is relevant
-            if [ "$SITE_FILTERING_ACTIVE" = false ] || is_file_relevant_to_site "$proxy_conf"; then
-                log_info "Analyzing: Shared Proxy Config"
-                detect_all_features_for_site "$site_name" "$proxy_conf"
-                mark_as_analyzed "$proxy_conf"
-            fi
-        fi
-    fi
-
-    # Check vhost config (unique per site)
-    local vhost_conf="${WP_TEST_NGINX}/vhost.d/${site_name}"
-    if [ -f "$vhost_conf" ]; then
-        # Always analyze vhost file for the target site
-        if [ "$SITE_FILTERING_ACTIVE" = false ] || is_file_relevant_to_site "$vhost_conf"; then
-            log_info "Analyzing: VHost Config ($site_name)"
-            detect_all_features_for_site "$site_name" "$vhost_conf"
-        fi
-    else
-        log_info "  No custom vhost config for $site_name"
-    fi
-
-    # Note: Redis detection is handled by detect_all_features_for_site() via registry
-
-    # Check for docker-compose
-    if [ -f "${site_dir}/docker-compose.yml" ]; then
-        echo -e "    ${GREEN}✓ Docker Compose Found${NC}"
-    fi
-
-    echo ""
 }
 
 analyze_optimizations() {
@@ -1298,10 +1263,12 @@ analyze_optimizations() {
 
     # If target_site specified, only analyze that site using per-site view
     if [ -n "$target_site" ]; then
-        # Initialize parser for Docker config if needed
-        if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "wp-test-proxy"; then
-            if type -t parse_docker_nginx_config &>/dev/null; then
-                parse_docker_nginx_config "wp-test-proxy" || log_warn "Could not parse Docker nginx config"
+        # Initialize parser for Docker config if needed (skip in system-only mode)
+        if [ "${SYSTEM_ONLY:-false}" != true ]; then
+            if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "wp-test-proxy"; then
+                if type -t parse_docker_nginx_config &>/dev/null; then
+                    parse_docker_nginx_config "wp-test-proxy" 2>/dev/null || true
+                fi
             fi
         fi
 
@@ -1339,15 +1306,21 @@ analyze_optimizations() {
     fi
 
     # Otherwise, extract ALL sites and analyze each
-    echo ""
-    echo "═══════════════════════════════════════════════════════════"
-    echo "Per-Site Configuration Analysis"
-    echo "═══════════════════════════════════════════════════════════"
+    if type -t ui_section &>/dev/null; then
+        ui_section "Analyzing configurations..."
+    else
+        echo ""
+        echo "═══════════════════════════════════════════════════════════"
+        echo "Per-Site Configuration Analysis"
+        echo "═══════════════════════════════════════════════════════════"
+    fi
 
-    # Initialize parser for Docker config if needed
-    if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "wp-test-proxy"; then
-        if type -t parse_docker_nginx_config &>/dev/null; then
-            parse_docker_nginx_config "wp-test-proxy" || log_warn "Could not parse Docker nginx config"
+    # Initialize parser for Docker config if needed (skip in system-only mode)
+    if [ "${SYSTEM_ONLY:-false}" != true ]; then
+        if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "wp-test-proxy"; then
+            if type -t parse_docker_nginx_config &>/dev/null; then
+                parse_docker_nginx_config "wp-test-proxy" 2>/dev/null || true
+            fi
         fi
     fi
 
@@ -1394,15 +1367,22 @@ analyze_optimizations() {
     # Update global count for recommendations
     TOTAL_SITES_ANALYZED=$total_sites
 
-    # Show summary
-    echo ""
-    echo "═══════════════════════════════════════════════════════════"
-    echo "Summary: $total_sites sites analyzed"
-    echo "═══════════════════════════════════════════════════════════"
-    echo "Legend:"
-    echo -e "  ${GREEN}✓${NC} = Enabled"
-    echo -e "  ${YELLOW}✗${NC} = Missing (can be optimized)"
-    echo "═══════════════════════════════════════════════════════════"
+    # Show summary with clean UI
+    if type -t ui_blank &>/dev/null; then
+        ui_blank
+        echo -e "  ─────────────────────────────────────────────────────"
+        echo -e "  ${GREEN}✓${NC} = Enabled    ${YELLOW}✗${NC} = Missing"
+        echo -e "  Analyzed ${total_sites} site(s)"
+    else
+        echo ""
+        echo "═══════════════════════════════════════════════════════════"
+        echo "Summary: $total_sites sites analyzed"
+        echo "═══════════════════════════════════════════════════════════"
+        echo "Legend:"
+        echo -e "  ${GREEN}✓${NC} = Enabled"
+        echo -e "  ${YELLOW}✗${NC} = Missing (can be optimized)"
+        echo "═══════════════════════════════════════════════════════════"
+    fi
 
     # Save to cache for instant subsequent runs
     if [ -n "$CACHED_CONFIG_HASH" ]; then
@@ -1415,16 +1395,10 @@ analyze_optimizations() {
     fi
 }
 
-# Global score counters
-SCORE_ENABLED=0
-SCORE_TOTAL=0
-
 # Recommendation tracking - stores "feature:site" entries
 # Format: "http3:site1.com\nhttp3:site2.com\nbrotli:ALL\n..."
 MISSING_FEATURES=""
 TOTAL_SITES_ANALYZED=0
-# shellcheck disable=SC2034  # Reserved for future use (site tracking)
-ALL_SITES_LIST=""
 
 # Get feature menu data from registry (dynamic, not hardcoded)
 # Falls back to static list if registry not available
@@ -1457,8 +1431,6 @@ record_missing_feature() {
 reset_recommendations() {
     MISSING_FEATURES=""
     TOTAL_SITES_ANALYZED=0
-    # shellcheck disable=SC2034  # Reserved for future use
-    ALL_SITES_LIST=""
 }
 
 # Generate and display recommendations
@@ -1467,11 +1439,11 @@ display_recommendations_menu() {
     local rec_count=0
 
     echo ""
-    echo -e "  ${CYAN}nginx-optimizer${NC} - Recommended Actions"
-    echo "  ─────────────────────────────────────────────────────"
+    echo -e "  Recommended optimizations:"
+    echo ""
 
     # Process each feature type
-    while IFS='|' read -r feat_name display_name is_global cli_feature; do
+    while IFS='|' read -r feat_name display_name _is_global cli_feature; do
         [ -z "$feat_name" ] && continue
 
         # Count sites missing this feature
@@ -1486,22 +1458,17 @@ display_recommendations_menu() {
 
         rec_count=$((rec_count + 1))
 
-        echo ""
-        if [ "$missing_count" -eq "$TOTAL_SITES_ANALYZED" ] && [ "$is_global" = "1" ]; then
-            echo -e "  ${GREEN}${rec_count}${NC}  ${display_name}"
-            echo -e "      Affects all $missing_count sites"
-        elif [ "$missing_count" -eq "$TOTAL_SITES_ANALYZED" ]; then
-            echo -e "  ${GREEN}${rec_count}${NC}  ${display_name}"
-            echo -e "      All $missing_count sites"
+        # Format: number + feature name + site info
+        local site_info=""
+        if [ "$missing_count" -eq "$TOTAL_SITES_ANALYZED" ]; then
+            site_info="all ${missing_count} sites"
         elif [ "$missing_count" -gt 3 ]; then
-            echo -e "  ${GREEN}${rec_count}${NC}  ${display_name}"
-            echo -e "      $missing_count sites need this"
+            site_info="${missing_count} sites"
         else
-            local site_list
-            site_list=$(printf '%s' "$missing_sites" | tr '\n' ', ' | sed 's/,$//')
-            echo -e "  ${GREEN}${rec_count}${NC}  ${display_name}"
-            echo -e "      ${site_list}"
+            site_info=$(printf '%s' "$missing_sites" | tr '\n' ', ' | sed 's/,$//')
         fi
+
+        printf "    ${GREEN}%d${NC}  %-24s ${CYAN}%s${NC}\n" "$rec_count" "$display_name" "$site_info"
     done <<< "$(get_feature_menu_data)"
 
     echo "$rec_count"  # Return count via stdout capture
@@ -1512,7 +1479,7 @@ get_feature_by_number() {
     local target_num="$1"
     local current=0
 
-    while IFS='|' read -r feat_name display_name is_global cli_feature; do
+    while IFS='|' read -r feat_name _display _is_global cli_feature; do
         [ -z "$feat_name" ] && continue
         local missing_sites
         missing_sites=$(printf '%s' "$MISSING_FEATURES" | grep "^${feat_name}:" | cut -d: -f2 | sort -u || true)
@@ -1535,8 +1502,8 @@ show_recommendations() {
         # Print menu without the count line (last line is rec_count)
         echo "$menu_output" | sed '$d'
         echo ""
-        echo -e "  ${CYAN}0.${NC} Apply ALL recommendations"
-        echo "═══════════════════════════════════════════════════════════"
+        echo -e "    ${GREEN}0${NC}  Apply ALL"
+        echo ""
         return 0
     fi
 
@@ -1550,31 +1517,36 @@ show_recommendations() {
         echo "$menu_output" | sed '$d'  # Print menu without the count line
 
         if [ "$rec_count" -eq 0 ] 2>/dev/null; then
-            echo ""
-            echo -e "  ┌─────────────────────────────────────────────────────┐"
-            echo -e "  │  ${GREEN}✓${NC} All optimizations already applied!             │"
-            echo -e "  └─────────────────────────────────────────────────────┘"
+            # All optimizations applied - show success box
+            if type -t ui_success_box &>/dev/null; then
+                ui_blank
+                ui_success_box "All optimizations applied"
+            else
+                echo ""
+                echo -e "  ┌─────────────────────────────────────────────────────┐"
+                echo -e "  │  ${GREEN}✓${NC} All optimizations already applied!             │"
+                echo -e "  └─────────────────────────────────────────────────────┘"
+            fi
             echo ""
             return 0
         fi
 
         echo ""
-        echo -e "  ${GREEN}0${NC}  Apply ALL recommendations"
+        echo -e "    ${GREEN}0${NC}  Apply ALL"
         echo ""
-        echo "  ─────────────────────────────────────────────────────"
-        echo -e "  ${CYAN}q${NC}=quit  ${CYAN}r${NC}=re-analyze  ${CYAN}Enter${NC}=refresh"
+        echo -e "  ─────────────────────────────────────────────────────"
+        echo -e "  ${CYAN}q${NC}=quit  ${CYAN}r${NC}=refresh"
         echo ""
         read -r -p "  Select [1-${rec_count}, 0=all, q]: " selection
 
         # Handle special inputs
         case "$selection" in
             q|Q|quit|exit)
-                echo -e "  ${CYAN}Goodbye!${NC}"
+                echo ""
                 return 0
                 ;;
             r|R|refresh|reanalyze)
                 echo ""
-                log_info "Re-analyzing configurations..."
                 # Clear cache and re-run analysis (skip recommendations to avoid nesting)
                 NO_CACHE=true
                 MISSING_FEATURES=""
@@ -1590,7 +1562,7 @@ show_recommendations() {
 
         # Validate numeric selection
         if ! [[ "$selection" =~ ^[0-9]+$ ]] || [ "$selection" -gt "$rec_count" ]; then
-            echo -e "${RED}Invalid selection.${NC} Enter 1-${rec_count}, 0 for all, or q to quit."
+            echo -e "  ${RED}Invalid selection.${NC}"
             sleep 1
             continue
         fi
@@ -1623,7 +1595,7 @@ show_recommendations() {
         read -r -p "  Apply these changes? [y/N/q]: " confirm
         case "$confirm" in
             q|Q|quit|exit)
-                echo -e "  ${CYAN}Goodbye!${NC}"
+                echo ""
                 return 0
                 ;;
             y|Y)
@@ -1634,7 +1606,7 @@ show_recommendations() {
                     ./nginx-optimizer.sh optimize --force "${common_flags[@]}" 2>&1 || true
                 fi
                 echo ""
-                echo -e "  ${CYAN}Press 'r' to refresh status, or select another option${NC}"
+                echo -e "  ${CYAN}Press 'r' to refresh, or select another option${NC}"
                 ;;
             *)
                 # N or empty - just go back to menu
@@ -1643,59 +1615,9 @@ show_recommendations() {
     done
 }
 
-reset_score() {
-    SCORE_ENABLED=0
-    SCORE_TOTAL=0
-}
-
-increment_score() {
-    local enabled=$1
-    SCORE_TOTAL=$((SCORE_TOTAL + 1))
-    if [ "$enabled" = "1" ]; then
-        SCORE_ENABLED=$((SCORE_ENABLED + 1))
-    fi
-}
-
-show_optimization_score() {
-    local enabled_count=$1
-    local total_count=$2
-    local bar_width=10
-
-    if [ "$total_count" -eq 0 ]; then
-        echo -e "${YELLOW}No optimizations checked${NC}"
-        return
-    fi
-
-    local percent=$(( (enabled_count * 100 + total_count / 2) / total_count ))
-    local filled=$(( (enabled_count * bar_width) / total_count ))
-    local full_block="█"
-    local empty_block="░"
-    local bar=""
-
-    for ((i = 0; i < bar_width; i++)); do
-        if (( i < filled )); then
-            bar+=$full_block
-        else
-            bar+=$empty_block
-        fi
-    done
-
-    local color
-    if (( percent >= 80 )); then
-        color=$GREEN
-    elif (( percent >= 50 )); then
-        color=$YELLOW
-    else
-        color=$RED
-    fi
-
-    echo -e "${color}[${bar}] ${enabled_count}/${total_count} (${percent}%)${NC}"
-}
-
 show_status() {
     local target_site="$1"
 
-    reset_score
     detect_nginx_instances "$target_site"
     analyze_optimizations "$target_site"
 }

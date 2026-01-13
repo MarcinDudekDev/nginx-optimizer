@@ -469,7 +469,7 @@ transaction_rollback() {
     TRANSACTION_TEMPS=()
     TRANSACTION_ACTIVE=false
 
-    log_info "Transaction rolled back"
+    log_to_file "INFO" "Transaction rolled back"
 }
 
 ################################################################################
@@ -488,32 +488,6 @@ purge_cached_templates() {
     return 0
 }
 
-ensure_referenced_templates() {
-    # If includes exist in sites-enabled but templates don't, recreate them
-    local sites_dir
-    sites_dir=$(get_nginx_sites_dir 2>/dev/null)
-
-    if [ -z "$sites_dir" ] || [ ! -d "$sites_dir" ]; then
-        return
-    fi
-
-    # Check for security-headers.conf references
-    if grep -rq "include.*security-headers.conf" "$sites_dir"/ 2>/dev/null; then
-        if [ ! -f "${TEMPLATE_DIR}/security-headers.conf" ]; then
-            log_info "Recreating security-headers.conf (referenced by includes)"
-            create_security_template
-        fi
-    fi
-
-    # Check for wordpress-exclusions.conf references
-    if grep -rq "include.*wordpress-exclusions.conf" "$sites_dir"/ 2>/dev/null; then
-        if [ ! -f "${TEMPLATE_DIR}/wordpress-exclusions.conf" ]; then
-            log_info "Recreating wordpress-exclusions.conf (referenced by includes)"
-            create_wordpress_exclusions_template
-        fi
-    fi
-}
-
 ################################################################################
 # Server Block Injection
 ################################################################################
@@ -526,7 +500,6 @@ inject_server_includes() {
     # Cross-platform sites directory detection
     sites_dir=$(get_nginx_sites_dir)
     if [ -z "$sites_dir" ] || [ ! -d "$sites_dir" ]; then
-        log_warn "No sites-enabled directory found"
         return 1
     fi
 
@@ -537,27 +510,27 @@ inject_server_includes() {
 
         # SECURITY: Validate file is safe to modify
         if ! is_safe_config_file "$site_conf"; then
-            log_warn "Skipping unsafe config file: $(basename "$site_conf")"
+            log_to_file "WARN" "Skipping unsafe config file: $(basename "$site_conf")"
             continue
         fi
 
         # SECURITY FIX: Check for exact include directive (anchored regex)
         # Use proper regex to avoid false positives
         if grep -qE "^[[:space:]]*include[[:space:]]+[^#]*${include_name}[[:space:]]*;" "$site_conf" 2>/dev/null; then
-            log_info "Already included in: $(basename "$site_conf")"
+            # Already included - skip silently
             continue
         fi
 
         # Skip if site already has inline protection (avoid duplicate location blocks)
         if [[ "$include_name" == *"wordpress"* ]] && grep -qE "location[[:space:]]*=[[:space:]]*/xmlrpc\.php" "$site_conf" 2>/dev/null; then
-            log_info "Already has xmlrpc protection: $(basename "$site_conf")"
+            # Already has protection - skip silently
             continue
         fi
 
         # SECURITY FIX: Check if file contains UNCOMMENTED server block
         # Skip commented lines to prevent injection into comments
         if ! grep -vE '^[[:space:]]*#' "$site_conf" 2>/dev/null | grep -q "server[[:space:]]*{"; then
-            log_info "No uncommented server block in: $(basename "$site_conf")"
+            # No server block - skip silently
             continue
         fi
 
@@ -568,7 +541,7 @@ inject_server_includes() {
     done
 
     if [ ${#files_to_modify[@]} -eq 0 ]; then
-        log_info "No new injections needed"
+        # No new injections needed - return silently
         return 0
     fi
 
@@ -685,25 +658,27 @@ inject_server_includes() {
         # Atomic move (try without sudo first)
         if [ "$use_sudo" = true ]; then
             if sudo mv "$temp" "$original" 2>/dev/null; then
-                log_success "Injected into: $(basename "$original")"
                 injected=$((injected + 1))
             else
-                log_error "Failed to commit: $(basename "$original")"
+                log_to_file "ERROR" "Failed to commit: $(basename "$original")"
             fi
         else
             if mv "$temp" "$original" 2>/dev/null; then
-                log_success "Injected into: $(basename "$original")"
                 injected=$((injected + 1))
             else
-                log_error "Failed to commit: $(basename "$original")"
+                log_to_file "ERROR" "Failed to commit: $(basename "$original")"
             fi
         fi
     done
 
     transaction_commit
 
+    # Show single summary line using UI
     if [ $injected -gt 0 ]; then
-        log_info "Injected into $injected server block(s)"
+        if type -t ui_step_path &>/dev/null; then
+            ui_step_path "Injected into" "sites-enabled/* (${injected} files)"
+        fi
+        log_to_file "SUCCESS" "Injected into $injected server block(s)"
     fi
 
     return 0
@@ -787,9 +762,6 @@ apply_optimizations() {
         fi
     fi
 
-    # Ensure templates exist if referenced by includes in sites-enabled
-    ensure_referenced_templates
-
     # Show features section header
     if type -t ui_section &>/dev/null; then
         if [ -n "$specific_feature" ]; then
@@ -858,7 +830,9 @@ apply_optimizations() {
                 log_success "$display_name applied"
             fi
         else
-            if type -t log_warn &>/dev/null; then
+            if type -t ui_step_fail &>/dev/null; then
+                ui_step_fail "$display_name" "failed"
+            else
                 log_warn "Failed to apply $display_name"
             fi
         fi
