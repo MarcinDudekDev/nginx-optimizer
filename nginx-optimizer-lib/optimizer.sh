@@ -795,6 +795,11 @@ apply_optimizations() {
         fi
     fi
 
+    # Start transaction for non-dry-run operations
+    if [ "$DRY_RUN" = false ] && [ "${CHECK_MODE:-false}" = false ]; then
+        transaction_start
+    fi
+
     # Loop through all registered features
     local feature_id
     while IFS= read -r feature_id; do
@@ -837,6 +842,11 @@ apply_optimizations() {
             fi
         fi
     done < <(feature_list)
+
+    # Commit transaction if active
+    if [ "$DRY_RUN" = false ] && [ "${CHECK_MODE:-false}" = false ] && [ "${TRANSACTION_ACTIVE:-false}" = true ]; then
+        transaction_commit
+    fi
 
     # Summary
     local applied_count=0

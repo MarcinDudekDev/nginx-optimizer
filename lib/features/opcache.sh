@@ -15,14 +15,23 @@ fi
 # Feature Definition
 ################################################################################
 
+# shellcheck disable=SC2034  # FEATURE_* vars consumed by feature_register() in registry.sh
 FEATURE_ID="opcache"
+# shellcheck disable=SC2034
 FEATURE_DISPLAY="PHP OpCache"
+# shellcheck disable=SC2034
 FEATURE_DETECT_PATTERN="opcache.enable=1"
+# shellcheck disable=SC2034
 FEATURE_SCOPE="global"
+# shellcheck disable=SC2034
 FEATURE_TEMPLATE="opcache.ini"
+# shellcheck disable=SC2034
 FEATURE_TEMPLATE_CONTEXT=""
+# shellcheck disable=SC2034
 FEATURE_ALIASES="php"
+# shellcheck disable=SC2034
 FEATURE_NGINX_MIN_VERSION=""
+# shellcheck disable=SC2034
 FEATURE_PREREQ_CHECK=""
 
 ################################################################################
@@ -34,7 +43,9 @@ FEATURE_PREREQ_CHECK=""
 # Returns: 0 if enabled, 1 if not
 # Sets: LAST_DIRECTIVE_SOURCE
 feature_detect_custom_opcache() {
+    # shellcheck disable=SC2034  # config_file reserved for API compatibility
     local config_file="$1"
+    # shellcheck disable=SC2034  # site_name reserved for API compatibility
     local site_name="$2"
 
     # Check if PHP is available
@@ -64,6 +75,7 @@ feature_detect_custom_opcache() {
             for conf_file in "$conf_dir"/*opcache*.ini; do
                 if [ -f "$conf_file" ]; then
                     if grep -q "opcache.enable=1\|opcache.enable = 1" "$conf_file" 2>/dev/null; then
+                        # shellcheck disable=SC2034  # LAST_DIRECTIVE_SOURCE consumed by registry.sh
                         LAST_DIRECTIVE_SOURCE="$conf_file"
                         return 0
                     fi
@@ -74,6 +86,7 @@ feature_detect_custom_opcache() {
 
     # Check if opcache is loaded via php -m
     if php -m 2>/dev/null | grep -iq "opcache"; then
+        # shellcheck disable=SC2034  # LAST_DIRECTIVE_SOURCE consumed by registry.sh
         LAST_DIRECTIVE_SOURCE="php.ini"
         return 0
     fi
@@ -89,6 +102,7 @@ feature_detect_custom_opcache() {
 # Args: $1 = target_site (unused for global scope)
 # Returns: 0 on success, 1 on failure
 feature_apply_custom_opcache() {
+    # shellcheck disable=SC2034  # target_site reserved for global features
     local target_site="${1:-}"
 
     if type -t log_to_file &>/dev/null; then

@@ -532,7 +532,61 @@ else
 fi
 
 ################################################################################
-# SECTION 9: Config Corpus (if nginx available)
+# SECTION 9: Input Validation Tests
+################################################################################
+log_section "Input Validation Tests"
+
+# Test: Path traversal rejected
+echo "Testing input validation..."
+traversal_output=$("${OPTIMIZER}" analyze "../etc/passwd" 2>&1 || true)
+if printf "%s" "$traversal_output" | grep -qi "invalid"; then
+    log_pass "Path traversal rejected: ../etc/passwd"
+else
+    log_fail "Path traversal not rejected: ../etc/passwd"
+fi
+
+# Test: Command injection rejected
+injection_output=$("${OPTIMIZER}" analyze 'site$(whoami)' 2>&1 || true)
+if printf "%s" "$injection_output" | grep -qi "invalid"; then
+    log_pass "Command injection rejected: site\$(whoami)"
+else
+    log_fail "Command injection not rejected: site\$(whoami)"
+fi
+
+# Test: Valid site name accepted (may fail on "not found" but not on validation)
+valid_output=$("${OPTIMIZER}" analyze "valid-site.local" 2>&1 || true)
+if printf "%s" "$valid_output" | grep -qi "invalid.*input"; then
+    log_fail "Valid site name rejected: valid-site.local"
+else
+    log_pass "Valid site name accepted: valid-site.local"
+fi
+
+# Test: Invalid rollback timestamp rejected
+rollback_output=$("${OPTIMIZER}" rollback "not-a-timestamp" 2>&1 || true)
+if printf "%s" "$rollback_output" | grep -qi "invalid.*timestamp"; then
+    log_pass "Invalid rollback timestamp rejected"
+else
+    log_fail "Invalid rollback timestamp not rejected"
+fi
+
+# Test: Backup dir outside HOME rejected
+backupdir_output=$("${OPTIMIZER}" optimize --backup-dir "/etc" 2>&1 || true)
+if printf "%s" "$backupdir_output" | grep -qi "must be under"; then
+    log_pass "Unsafe backup dir rejected: /etc"
+else
+    log_fail "Unsafe backup dir not rejected: /etc"
+fi
+
+# Test: Check command works
+check_output=$("${OPTIMIZER}" check 2>&1 || true)
+if printf "%s" "$check_output" | grep -qiE "(check|ready|issue|Prerequisites)"; then
+    log_pass "check command works"
+else
+    log_fail "check command failed"
+fi
+
+################################################################################
+# SECTION 10: Config Corpus (if nginx available)
 ################################################################################
 log_section "Config Corpus Validation"
 

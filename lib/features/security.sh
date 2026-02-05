@@ -15,14 +15,23 @@ fi
 # Feature Definition
 ################################################################################
 
+# shellcheck disable=SC2034  # FEATURE_* vars consumed by feature_register() in registry.sh
 FEATURE_ID="security"
+# shellcheck disable=SC2034
 FEATURE_DISPLAY="Security Headers & Rate Limiting"
+# shellcheck disable=SC2034
 FEATURE_DETECT_PATTERN="Strict-Transport-Security"
+# shellcheck disable=SC2034
 FEATURE_SCOPE="per-site"
+# shellcheck disable=SC2034
 FEATURE_TEMPLATE="security-headers.conf,security-http.conf"
+# shellcheck disable=SC2034
 FEATURE_TEMPLATE_CONTEXT="server"
+# shellcheck disable=SC2034
 FEATURE_ALIASES="headers"
+# shellcheck disable=SC2034
 FEATURE_NGINX_MIN_VERSION=""
+# shellcheck disable=SC2034
 FEATURE_PREREQ_CHECK=""
 
 ################################################################################

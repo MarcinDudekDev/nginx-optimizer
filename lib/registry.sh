@@ -298,6 +298,7 @@ feature_detect() {
         local IFS=','
         for tmpl in $template_names; do
             if grep -qE "include.*${tmpl}" "$config_file" 2>/dev/null; then
+                # shellcheck disable=SC2034  # LAST_DIRECTIVE_SOURCE consumed by caller
                 LAST_DIRECTIVE_SOURCE="$config_file (via include)"
                 return 0
             fi

@@ -15,14 +15,23 @@ fi
 # Feature Definition
 ################################################################################
 
+# shellcheck disable=SC2034  # FEATURE_* vars consumed by feature_register() in registry.sh
 FEATURE_ID="redis"
+# shellcheck disable=SC2034
 FEATURE_DISPLAY="Redis Object Cache"
+# shellcheck disable=SC2034
 FEATURE_DETECT_PATTERN="docker-compose:redis"
+# shellcheck disable=SC2034
 FEATURE_SCOPE="per-site"
+# shellcheck disable=SC2034
 FEATURE_TEMPLATE=""
+# shellcheck disable=SC2034
 FEATURE_TEMPLATE_CONTEXT=""
+# shellcheck disable=SC2034
 FEATURE_ALIASES=""
+# shellcheck disable=SC2034
 FEATURE_NGINX_MIN_VERSION=""
+# shellcheck disable=SC2034
 FEATURE_PREREQ_CHECK=""
 
 ################################################################################
@@ -34,11 +43,13 @@ FEATURE_PREREQ_CHECK=""
 # Returns: 0 if enabled, 1 if not
 # Sets: LAST_DIRECTIVE_SOURCE
 feature_detect_custom_redis() {
+    # shellcheck disable=SC2034  # config_file reserved for API compatibility
     local config_file="$1"
     local site_name="${2:-}"
 
     # Check 1: System Redis - is redis-server running?
     if command -v redis-cli &>/dev/null && redis-cli ping &>/dev/null 2>&1; then
+        # shellcheck disable=SC2034  # LAST_DIRECTIVE_SOURCE consumed by registry.sh
         LAST_DIRECTIVE_SOURCE="system (redis-server running)"
         return 0
     fi
@@ -48,6 +59,7 @@ feature_detect_custom_redis() {
         local wp_test_sites="${WP_TEST_SITES:-$HOME/.wp-test/sites}"
         local compose_file="${wp_test_sites}/${site_name}/docker-compose.yml"
         if [[ -f "$compose_file" ]] && grep -q "redis:" "$compose_file" 2>/dev/null; then
+            # shellcheck disable=SC2034  # LAST_DIRECTIVE_SOURCE consumed by registry.sh
             LAST_DIRECTIVE_SOURCE="$compose_file"
             return 0
         fi

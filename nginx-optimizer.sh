@@ -50,6 +50,7 @@ JSON_OUTPUT=false
 SHOW_VERSION=false
 # shellcheck disable=SC2034  # Used by sourced library files (detector.sh)
 NO_CACHE=false
+CHECK_MODE=false
 SPECIFIC_FEATURE=""
 EXCLUDE_FEATURE=""
 # shellcheck disable=SC2034  # Used by sourced library files (backup.sh)
@@ -71,6 +72,13 @@ ALLOWED_FEATURES=(
     "www-ssl" "www"
     "honeypot"
 )
+
+# Validate input name (site names, backup timestamps)
+# Must be safe for use in file paths - no traversal, no special chars
+_validate_input_name() {
+    local name="$1"
+    [[ "$name" =~ ^[a-zA-Z0-9._-]+$ ]] && [[ "$name" != *".."* ]] && [[ "$name" != /* ]]
+}
 
 # Validate feature name against allowed list
 validate_feature_name() {
@@ -287,6 +295,7 @@ COMMANDS:
     honeypot <site>             Deploy honeypot tarpit for site (traps bots)
     honeypot-logs [hours]       Analyze honeypot logs (default: 24h)
     honeypot-export             Export attacker IPs for blocklists
+    check [site]                Pre-flight readiness check (deps, config, features)
     fix-warnings                Detect and fix nginx config warnings
     update                      Self-update from git repository
     help                        Show this help message
@@ -302,6 +311,7 @@ OPTIONS:
     --backup-dir <path>         Custom backup directory
     --system-only               Only operate on system nginx (skip wp-test)
     --no-rate-limit             Disable rate limiting in security config
+    --check                     Pre-flight check (same as 'check' command)
     -v, --version               Show version
 
 FEATURES:
@@ -410,6 +420,12 @@ cmd_analyze() {
 }
 
 cmd_optimize() {
+    # If --check was passed with optimize, run check instead
+    if [ "$CHECK_MODE" = true ]; then
+        cmd_check
+        return $?
+    fi
+
     # Create backup first (before showing UI)
     if [ "$DRY_RUN" = false ]; then
         if type -t create_backup &>/dev/null; then
@@ -444,6 +460,13 @@ cmd_rollback() {
         ls -1 "${BACKUP_DIR}" | tail -10
         echo ""
         read -rp "Enter backup timestamp to restore: " backup_timestamp
+    fi
+
+    # Validate backup timestamp format (YYYYMMDD-HHMMSS)
+    if [[ ! "$backup_timestamp" =~ ^[0-9]{8}-[0-9]{6}$ ]]; then
+        log_error "Invalid backup timestamp format: $backup_timestamp"
+        log_error "Expected format: YYYYMMDD-HHMMSS (e.g., 20250124-143022)"
+        exit 1
     fi
 
     if type -t restore_backup &>/dev/null; then
@@ -552,6 +575,108 @@ cmd_compile() {
     else
         log_error "Compiler library not loaded"
         exit 1
+    fi
+}
+
+cmd_check() {
+    # Show header
+    if type -t ui_header &>/dev/null; then
+        ui_header
+        ui_context "Checking" "${TARGET_SITE:-System readiness}"
+        ui_blank
+    else
+        log_info "Running pre-optimization checks..."
+    fi
+
+    local issues=0
+
+    # 1. Check prerequisites
+    if type -t ui_section &>/dev/null; then
+        ui_section "Prerequisites"
+    fi
+    local deps_ok=true
+    for cmd in rsync curl jq; do
+        if command -v "$cmd" &>/dev/null; then
+            log_success "  $cmd: found"
+        else
+            log_error "  $cmd: missing"
+            deps_ok=false
+            issues=$((issues + 1))
+        fi
+    done
+    if [ "$deps_ok" = true ]; then
+        log_success "All dependencies available"
+    fi
+
+    # 2. Test nginx configuration
+    if type -t ui_section &>/dev/null; then
+        ui_section "Nginx Configuration"
+    fi
+    if command -v nginx &>/dev/null; then
+        if nginx -t 2>/dev/null; then
+            log_success "nginx configuration valid"
+        else
+            log_error "nginx configuration invalid"
+            issues=$((issues + 1))
+        fi
+    elif command -v docker &>/dev/null && docker ps --format "{{.Names}}" 2>/dev/null | grep -q "wp-test-proxy"; then
+        if docker exec wp-test-proxy nginx -t 2>/dev/null; then
+            log_success "wp-test nginx-proxy configuration valid"
+        else
+            log_error "wp-test nginx-proxy configuration invalid"
+            issues=$((issues + 1))
+        fi
+    else
+        log_warn "No nginx instance found (system or Docker)"
+    fi
+
+    # 3. Check registered features
+    if type -t ui_section &>/dev/null; then
+        ui_section "Registered Features"
+    fi
+    if type -t feature_list &>/dev/null; then
+        local feature_id
+        while IFS= read -r feature_id; do
+            [ -z "$feature_id" ] && continue
+            local display_name
+            display_name=$(feature_get "$feature_id" "display" 2>/dev/null)
+            [ -z "$display_name" ] && display_name="$feature_id"
+            log_info "  $display_name ($feature_id)"
+        done < <(feature_list)
+    else
+        log_warn "Feature registry not loaded"
+        issues=$((issues + 1))
+    fi
+
+    # 4. Check backup directory
+    if type -t ui_section &>/dev/null; then
+        ui_section "Backup System"
+    fi
+    if [ -d "$BACKUP_DIR" ] && [ -w "$BACKUP_DIR" ]; then
+        local backup_count
+        backup_count=$(ls -1 "$BACKUP_DIR" 2>/dev/null | wc -l | tr -d ' ')
+        log_success "Backup directory writable ($backup_count existing backups)"
+    else
+        log_error "Backup directory not writable: $BACKUP_DIR"
+        issues=$((issues + 1))
+    fi
+
+    # Summary
+    echo ""
+    if [ "$issues" -eq 0 ]; then
+        if type -t ui_success_box &>/dev/null; then
+            ui_success_box "System ready" "All checks passed. Safe to run optimize."
+        else
+            log_success "All checks passed. System ready for optimization."
+        fi
+        return 0
+    else
+        if type -t ui_warn_box &>/dev/null; then
+            ui_warn_box "$issues issue(s) found. Review above before optimizing."
+        else
+            log_error "$issues issue(s) found. Review above before optimizing."
+        fi
+        return 1
     fi
 }
 
@@ -737,7 +862,7 @@ parse_arguments() {
 
     while [ $# -gt 0 ]; do
         case "$1" in
-            analyze|optimize|compile|rollback|test|status|list|benchmark|help|update|honeypot|honeypot-logs|honeypot-export|honeypot-fail2ban|fix-warnings)
+            analyze|optimize|compile|rollback|test|status|list|benchmark|check|help|update|honeypot|honeypot-logs|honeypot-export|honeypot-fail2ban|fix-warnings)
                 COMMAND="$1"
                 shift
                 ;;
@@ -800,8 +925,19 @@ parse_arguments() {
                     log_error "--backup-dir requires a path"
                     exit 1
                 fi
-                # shellcheck disable=SC2034  # Used by sourced library files
-                CUSTOM_BACKUP_DIR="$2"
+                # Resolve and validate path - must be under $HOME or /tmp
+                local resolved_backup_dir
+                resolved_backup_dir=$(realpath "$2" 2>/dev/null || echo "$2")
+                case "$resolved_backup_dir" in
+                    "$HOME"/*|/tmp/*)
+                        # shellcheck disable=SC2034  # Used by sourced library files
+                        CUSTOM_BACKUP_DIR="$resolved_backup_dir"
+                        ;;
+                    *)
+                        log_error "Backup directory must be under \$HOME or /tmp: $2"
+                        exit 1
+                        ;;
+                esac
                 shift 2
                 ;;
             --system-only)
@@ -812,6 +948,11 @@ parse_arguments() {
             --no-rate-limit)
                 NO_RATE_LIMIT=true
                 export NO_RATE_LIMIT
+                shift
+                ;;
+            --check)
+                CHECK_MODE=true
+                DRY_RUN=true
                 shift
                 ;;
             -v|--version)
@@ -828,8 +969,17 @@ parse_arguments() {
                 exit 1
                 ;;
             *)
-                # Assume it's a site name or backup timestamp
-                TARGET_SITE="$1"
+                # Validate as site name or backup timestamp
+                if [[ "$1" =~ ^[0-9]{8}-[0-9]{6}$ ]]; then
+                    # Valid backup timestamp format
+                    TARGET_SITE="$1"
+                elif _validate_input_name "$1"; then
+                    TARGET_SITE="$1"
+                else
+                    log_error "Invalid input: $1"
+                    log_error "Site names can only contain: a-z, A-Z, 0-9, dots, hyphens, underscores"
+                    exit 1
+                fi
                 shift
                 ;;
         esac
@@ -859,7 +1009,17 @@ main() {
 
     # Acquire lock to prevent race conditions
     acquire_lock
-    trap release_lock EXIT
+
+    # Combined cleanup handler: rollback active transactions + release lock
+    cleanup_handler() {
+        # Rollback any in-progress transaction
+        if type -t transaction_rollback &>/dev/null && [ "${TRANSACTION_ACTIVE:-false}" = true ]; then
+            transaction_rollback
+            log_warn "Transaction rolled back due to interruption" 2>/dev/null || true
+        fi
+        release_lock
+    }
+    trap cleanup_handler EXIT INT TERM
 
     # Show banner only in verbose mode (new UI handles headers)
     if [ "$VERBOSE" = true ] && [ "$QUIET" = false ]; then
@@ -899,6 +1059,9 @@ main() {
             ;;
         benchmark)
             cmd_benchmark
+            ;;
+        check)
+            cmd_check
             ;;
         honeypot)
             cmd_honeypot

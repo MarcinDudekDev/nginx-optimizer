@@ -15,14 +15,23 @@ fi
 # Feature Definition
 ################################################################################
 
+# shellcheck disable=SC2034  # FEATURE_* vars consumed by feature_register() in registry.sh
 FEATURE_ID="brotli"
+# shellcheck disable=SC2034
 FEATURE_DISPLAY="Compression"
+# shellcheck disable=SC2034
 FEATURE_DETECT_PATTERN="brotli on"
+# shellcheck disable=SC2034
 FEATURE_SCOPE="global"
+# shellcheck disable=SC2034
 FEATURE_TEMPLATE="compression.conf"
+# shellcheck disable=SC2034
 FEATURE_TEMPLATE_CONTEXT="http"
+# shellcheck disable=SC2034
 FEATURE_ALIASES="compression"
+# shellcheck disable=SC2034
 FEATURE_NGINX_MIN_VERSION=""
+# shellcheck disable=SC2034
 FEATURE_PREREQ_CHECK=""
 
 ################################################################################
@@ -34,11 +43,13 @@ FEATURE_PREREQ_CHECK=""
 # Returns: 0 if compression is enabled, 1 if not
 feature_detect_custom_brotli() {
     local config_file="$1"
+    # shellcheck disable=SC2034  # site_name used in conditional logic
     local site_name="${2:-}"
 
     # Check if wp-test-proxy uses brotli-enabled image
     if command -v docker &>/dev/null; then
         if docker ps --filter "name=wp-test-proxy" --format "{{.Image}}" 2>/dev/null | grep -q "brotli"; then
+            # shellcheck disable=SC2034  # LAST_DIRECTIVE_SOURCE consumed by registry.sh
             LAST_DIRECTIVE_SOURCE="docker:wp-test-proxy"
             return 0
         fi
@@ -46,6 +57,7 @@ feature_detect_custom_brotli() {
 
     # Check site config for brotli
     if [[ -f "$config_file" ]] && grep -qE "brotli[[:space:]]+on" "$config_file" 2>/dev/null; then
+        # shellcheck disable=SC2034  # LAST_DIRECTIVE_SOURCE consumed by registry.sh
         LAST_DIRECTIVE_SOURCE="$config_file"
         return 0
     fi
@@ -58,11 +70,13 @@ feature_detect_custom_brotli() {
     if [[ -n "$confd_dir" ]] && [[ -d "$confd_dir" ]]; then
         # Check for our compression.conf
         if [[ -f "${confd_dir}/compression.conf" ]]; then
+            # shellcheck disable=SC2034  # LAST_DIRECTIVE_SOURCE consumed by registry.sh
             LAST_DIRECTIVE_SOURCE="conf.d/compression.conf"
             return 0
         fi
         # Check for gzip in any conf.d file
         if grep -rqE "gzip[[:space:]]+on" "$confd_dir" 2>/dev/null; then
+            # shellcheck disable=SC2034  # LAST_DIRECTIVE_SOURCE consumed by registry.sh
             LAST_DIRECTIVE_SOURCE="conf.d/"
             return 0
         fi
@@ -73,6 +87,7 @@ feature_detect_custom_brotli() {
     if type -t get_nginx_main_conf &>/dev/null; then
         nginx_conf=$(get_nginx_main_conf)
         if [[ -f "$nginx_conf" ]] && grep -qE "gzip[[:space:]]+on" "$nginx_conf" 2>/dev/null; then
+            # shellcheck disable=SC2034  # LAST_DIRECTIVE_SOURCE consumed by registry.sh
             LAST_DIRECTIVE_SOURCE="$nginx_conf"
             return 0
         fi
@@ -80,6 +95,7 @@ feature_detect_custom_brotli() {
         # Fallback to hardcoded paths
         for conf in /etc/nginx/nginx.conf /usr/local/etc/nginx/nginx.conf /opt/homebrew/etc/nginx/nginx.conf; do
             if [[ -f "$conf" ]] && grep -qE "gzip[[:space:]]+on" "$conf" 2>/dev/null; then
+                # shellcheck disable=SC2034  # LAST_DIRECTIVE_SOURCE consumed by registry.sh
                 LAST_DIRECTIVE_SOURCE="$conf"
                 return 0
             fi
@@ -97,6 +113,7 @@ feature_detect_custom_brotli() {
 # Args: $1 = target_site (optional, ignored for global feature)
 # Returns: 0 on success, 1 on failure
 feature_apply_custom_brotli() {
+    # shellcheck disable=SC2034  # target_site reserved for global features
     local target_site="${1:-}"
 
     if type -t log_to_file &>/dev/null; then

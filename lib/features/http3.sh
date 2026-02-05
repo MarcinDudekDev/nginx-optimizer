@@ -15,14 +15,23 @@ fi
 # Feature Definition
 ################################################################################
 
+# shellcheck disable=SC2034  # FEATURE_* vars consumed by feature_register() in registry.sh
 FEATURE_ID="http3"
+# shellcheck disable=SC2034
 FEATURE_DISPLAY="HTTP/3 QUIC"
+# shellcheck disable=SC2034
 FEATURE_DETECT_PATTERN="listen.*quic"
+# shellcheck disable=SC2034
 FEATURE_SCOPE="per-site"
+# shellcheck disable=SC2034
 FEATURE_TEMPLATE="http3-quic.conf"
+# shellcheck disable=SC2034
 FEATURE_TEMPLATE_CONTEXT="server"
+# shellcheck disable=SC2034
 FEATURE_ALIASES="quic"
+# shellcheck disable=SC2034
 FEATURE_NGINX_MIN_VERSION="1.25"
+# shellcheck disable=SC2034
 FEATURE_PREREQ_CHECK=""
 
 ################################################################################

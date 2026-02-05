@@ -15,14 +15,23 @@ fi
 # Feature Definition
 ################################################################################
 
+# shellcheck disable=SC2034  # FEATURE_* vars consumed by feature_register() in registry.sh
 FEATURE_ID="wordpress"
+# shellcheck disable=SC2034
 FEATURE_DISPLAY="WordPress Security Exclusions"
+# shellcheck disable=SC2034
 FEATURE_DETECT_PATTERN="xmlrpc"
+# shellcheck disable=SC2034
 FEATURE_SCOPE="per-site"
+# shellcheck disable=SC2034
 FEATURE_TEMPLATE="wordpress-exclusions.conf"
+# shellcheck disable=SC2034
 FEATURE_TEMPLATE_CONTEXT="server"
+# shellcheck disable=SC2034
 FEATURE_ALIASES="wp"
+# shellcheck disable=SC2034
 FEATURE_NGINX_MIN_VERSION=""
+# shellcheck disable=SC2034
 FEATURE_PREREQ_CHECK=""
 
 ################################################################################

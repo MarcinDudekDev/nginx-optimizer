@@ -556,8 +556,18 @@ validate_and_reload() {
     # Restart PHP-FPM if OpCache was modified
     restart_php_fpm
 
-    # Run health check after reload
-    health_check_sites "$target_site"
+    # Run health check after reload - rollback on failure
+    if ! health_check_sites "$target_site"; then
+        log_error "Health check failed - rolling back..."
+        if [ -n "${CURRENT_BACKUP_DIR:-}" ]; then
+            restore_backup "$(basename "$CURRENT_BACKUP_DIR")"
+            if test_nginx_config "$target_site"; then
+                reload_nginx
+                log_warn "Rolled back to previous working config"
+            fi
+        fi
+        exit 1
+    fi
 
     log_success "Validation and reload complete"
 }

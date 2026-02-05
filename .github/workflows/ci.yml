@@ -20,10 +20,10 @@ jobs:
         run: sudo apt-get install -y shellcheck
 
       - name: Run shellcheck (errors)
-        run: shellcheck --severity=error nginx-optimizer.sh nginx-optimizer-lib/*.sh
+        run: shellcheck --severity=error nginx-optimizer.sh nginx-optimizer-lib/*.sh lib/registry.sh lib/core/*.sh lib/features/*.sh
 
       - name: Run shellcheck (warnings)
-        run: shellcheck --severity=warning nginx-optimizer.sh nginx-optimizer-lib/*.sh
+        run: shellcheck --severity=warning nginx-optimizer.sh nginx-optimizer-lib/*.sh lib/registry.sh lib/core/*.sh lib/features/*.sh
 
   syntax-check:
     name: Bash Syntax (${{ matrix.os }})
@@ -43,6 +43,12 @@ jobs:
       - name: Check bash syntax - library files
         run: |
           for f in nginx-optimizer-lib/*.sh; do
+            bash -n "$f" || exit 1
+          done
+
+      - name: Check bash syntax - plugin architecture
+        run: |
+          for f in lib/registry.sh lib/core/*.sh lib/features/*.sh; do
             bash -n "$f" || exit 1
           done
 
@@ -81,6 +87,13 @@ jobs:
 
       - name: Test dry-run mode
         run: ./nginx-optimizer.sh optimize --dry-run 2>&1 | grep -q "DRY RUN"
+
+      - name: Test check command
+        run: ./nginx-optimizer.sh check 2>&1 | grep -qiE "(check|ready|issue|Prerequisites)"
+
+      - name: Docker nginx validation
+        if: matrix.os == 'ubuntu-latest'
+        run: ./tests/test-with-nginx.sh
 
   portability:
     name: Portability Check

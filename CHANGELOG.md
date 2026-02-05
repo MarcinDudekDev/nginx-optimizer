@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1-beta] - 2026-02-05
+
+### Added
+- `check` command for pre-flight readiness checks (deps, config, features, backup dir)
+- `--check` flag as shorthand for check command (also works with `optimize --check`)
+- `--no-rate-limit` flag to disable rate limiting in security config
+- Input validation for site names, backup timestamps, and backup directory paths
+- Auto-rollback on health check failure after optimization
+- Transaction wrapping around optimization loop for atomic operations
+- Combined trap handler (EXIT/INT/TERM) for transaction + lock cleanup
+- Docker-based nginx config validation test suite (`tests/test-with-nginx.sh`)
+- Input validation test cases (path traversal, command injection, timestamp format)
+- CI: shellcheck and syntax checks now cover `lib/` plugin architecture
+- CI: Docker nginx -t validation step (Ubuntu only)
+- CI: check command integration test
+
+### Security
+- **Path traversal prevention**: Site names validated against `^[a-zA-Z0-9._-]+$`
+- **Command injection prevention**: Special characters in site names rejected
+- **Backup directory restriction**: `--backup-dir` only allows paths under `$HOME` or `/tmp`
+- **Rollback timestamp validation**: Only `YYYYMMDD-HHMMSS` format accepted
+- **Interrupt safety**: Ctrl+C during optimization triggers transaction rollback
+
+### Fixed
+- Health check return value was ignored after optimization reload
+- Shellcheck warnings in `lib/` plugin architecture (SC2034 false positives)
+- Test suite: pipefail compatibility for validation tests
+
 ## [0.9.0-beta] - 2025-01-09
 
 ### Added

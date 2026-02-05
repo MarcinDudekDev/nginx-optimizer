@@ -15,14 +15,23 @@ fi
 # Feature Definition
 ################################################################################
 
+# shellcheck disable=SC2034  # FEATURE_* vars consumed by feature_register() in registry.sh
 FEATURE_ID="fastcgi-cache"
+# shellcheck disable=SC2034
 FEATURE_DISPLAY="FastCGI Full-Page Cache"
+# shellcheck disable=SC2034
 FEATURE_DETECT_PATTERN="fastcgi_cache_path"
+# shellcheck disable=SC2034
 FEATURE_SCOPE="per-site"
+# shellcheck disable=SC2034
 FEATURE_TEMPLATE="fastcgi-cache.conf,fastcgi-cache-zone.conf"
+# shellcheck disable=SC2034
 FEATURE_TEMPLATE_CONTEXT="mixed"
+# shellcheck disable=SC2034
 FEATURE_ALIASES="fastcgi,cache"
+# shellcheck disable=SC2034
 FEATURE_NGINX_MIN_VERSION=""
+# shellcheck disable=SC2034
 FEATURE_PREREQ_CHECK=""
 
 ################################################################################
@@ -36,16 +45,19 @@ FEATURE_PREREQ_CHECK=""
 # Returns: 0 if detected, 1 if not
 feature_detect_custom_fastcgi_cache() {
     local config_file="$1"
+    # shellcheck disable=SC2034  # site_name reserved for API compatibility
     local site_name="${2:-}"
 
     # Check if site config has fastcgi_cache directive
     if grep -qE "fastcgi_cache[[:space:]]+" "$config_file" 2>/dev/null; then
+        # shellcheck disable=SC2034  # LAST_DIRECTIVE_SOURCE consumed by registry.sh
         LAST_DIRECTIVE_SOURCE="$config_file"
         return 0
     fi
 
     # Check if site config includes our fastcgi-cache template
     if grep -qE "include.*fastcgi-cache\.conf" "$config_file" 2>/dev/null; then
+        # shellcheck disable=SC2034  # LAST_DIRECTIVE_SOURCE consumed by registry.sh
         LAST_DIRECTIVE_SOURCE="$config_file (via include)"
         return 0
     fi
@@ -57,6 +69,7 @@ feature_detect_custom_fastcgi_cache() {
     fi
     if [[ -n "$confd_dir" ]] && [[ -d "$confd_dir" ]]; then
         if grep -rqE "fastcgi_cache_path" "$confd_dir" 2>/dev/null; then
+            # shellcheck disable=SC2034  # LAST_DIRECTIVE_SOURCE consumed by registry.sh
             LAST_DIRECTIVE_SOURCE="conf.d/"
             return 0
         fi
