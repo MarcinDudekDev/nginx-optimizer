@@ -56,6 +56,8 @@ EXCLUDE_FEATURE=""
 CUSTOM_BACKUP_DIR=""
 TARGET_SITE=""
 SYSTEM_ONLY=false
+# shellcheck disable=SC2034  # Used by sourced library files (security.sh)
+NO_RATE_LIMIT=false
 
 # Allowed feature names for --feature flag
 ALLOWED_FEATURES=(
@@ -299,6 +301,7 @@ OPTIONS:
     --exclude <name>            Exclude specific feature
     --backup-dir <path>         Custom backup directory
     --system-only               Only operate on system nginx (skip wp-test)
+    --no-rate-limit             Disable rate limiting in security config
     -v, --version               Show version
 
 FEATURES:
@@ -804,6 +807,11 @@ parse_arguments() {
             --system-only)
                 SYSTEM_ONLY=true
                 export SYSTEM_ONLY
+                shift
+                ;;
+            --no-rate-limit)
+                NO_RATE_LIMIT=true
+                export NO_RATE_LIMIT
                 shift
                 ;;
             -v|--version)

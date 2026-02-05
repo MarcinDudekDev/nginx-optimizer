@@ -68,9 +68,15 @@ feature_apply_custom_security() {
 _security_apply_system() {
     local target_site="$1"
 
-    # Deploy rate limiting zones to conf.d (http context)
-    if type -t deploy_template_to_confd &>/dev/null; then
-        deploy_template_to_confd "security-http.conf"
+    # Deploy rate limiting zones to conf.d (http context) - skip if --no-rate-limit
+    if [ "${NO_RATE_LIMIT:-false}" != true ]; then
+        if type -t deploy_template_to_confd &>/dev/null; then
+            deploy_template_to_confd "security-http.conf"
+        fi
+    else
+        if type -t ui_step &>/dev/null; then
+            ui_step "Skipping rate limiting zones (--no-rate-limit)"
+        fi
     fi
 
     if [ "${DRY_RUN:-false}" = true ]; then
@@ -98,7 +104,9 @@ _security_apply_wptest() {
 
     if [ "${DRY_RUN:-false}" = true ]; then
         if type -t ui_step_path &>/dev/null; then
-            ui_step_path "Would configure" "wp-test security"
+            local desc="wp-test security"
+            [ "${NO_RATE_LIMIT:-false}" = true ] && desc="wp-test security (no rate limit)"
+            ui_step_path "Would configure" "$desc"
         fi
         return 0
     fi
@@ -109,11 +117,23 @@ _security_apply_wptest() {
     mkdir -p "$vhost_dir"
 
     # Deploy security headers to vhost.d/default
-    if type -t deploy_template_to_wptest &>/dev/null; then
+    local template_dir="${TEMPLATE_DIR:-nginx-optimizer-templates}"
+    local source_template="${template_dir}/wp-test-vhost-default.conf"
+
+    if [[ -f "$source_template" ]]; then
+        if [ "${NO_RATE_LIMIT:-false}" = true ]; then
+            # Strip rate limiting directives when --no-rate-limit is set
+            grep -v -E "^(limit_req|limit_conn)" "$source_template" > "$vhost_default"
+            if type -t ui_step &>/dev/null; then
+                ui_step "Deployed security config (rate limiting disabled)"
+            fi
+        else
+            cp "$source_template" "$vhost_default"
+        fi
+    elif type -t deploy_template_to_wptest &>/dev/null; then
         deploy_template_to_wptest "security-headers.conf"
     else
         # Fallback: copy template directly
-        local template_dir="${TEMPLATE_DIR:-nginx-optimizer-templates}"
         if [[ -f "${template_dir}/security-headers.conf" ]]; then
             cp "${template_dir}/security-headers.conf" "$vhost_default"
         fi
