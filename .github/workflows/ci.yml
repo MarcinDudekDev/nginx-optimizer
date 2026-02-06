@@ -80,7 +80,7 @@ jobs:
         run: |
           version=$(./nginx-optimizer.sh --version 2>&1)
           echo "Version: $version"
-          echo "$version" | grep -q "0.9.0-beta" || exit 1
+          echo "$version" | grep -q "0.9.1-beta" || exit 1
 
       - name: Test help command
         run: ./nginx-optimizer.sh help | grep -q "COMMANDS:"

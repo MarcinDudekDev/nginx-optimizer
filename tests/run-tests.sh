@@ -103,7 +103,7 @@ log_section "Functional Tests"
 # Test: Version command
 echo "Testing commands..."
 version_output=$("${OPTIMIZER}" --version 2>&1 || true)
-if echo "$version_output" | grep -q "0.9.0-beta"; then
+if echo "$version_output" | grep -q "0.9.1-beta"; then
     log_pass "--version returns correct version"
 else
     log_fail "--version incorrect"

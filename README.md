@@ -4,7 +4,7 @@
 
 Comprehensive NGINX optimization tool with HTTP/3, Brotli, FastCGI cache, Redis, security headers, and WordPress-specific optimizations.
 
-**Version:** 0.9.0-beta | **Status:** Beta (production-ready for WordPress sites)
+**Version:** 0.9.1-beta | **Status:** Beta (production-ready for WordPress sites)
 
 ## Installation
 
@@ -109,6 +109,7 @@ nginx-optimizer optimize --exclude brotli
 | `status [site]` | Show optimization status |
 | `list` | List all detected nginx installations |
 | `benchmark [site]` | Run performance tests |
+| `check [site]` | Pre-flight readiness check (deps, config, features) |
 | `update` | Self-update from GitHub |
 | `help` | Show help message |
 
@@ -123,6 +124,9 @@ nginx-optimizer optimize --exclude brotli
 | `--backup-dir <path>` | Custom backup location |
 | `--quiet` | Suppress output (for scripting) |
 | `--json` | Output JSON (for status, list, analyze) |
+| `--system-only` | Only operate on system nginx (skip wp-test) |
+| `--no-rate-limit` | Disable rate limiting in security config |
+| `--check` | Pre-flight check (shorthand for `check` command) |
 | `-v, --version` | Show version |
 
 ## Available Features
@@ -323,7 +327,31 @@ For issues or questions:
 
 ## Version
 
-nginx-optimizer v0.9.0-beta
+nginx-optimizer v0.9.1-beta
+
+## Roadmap
+
+### v0.10.x - Polish & Robustness
+- `remove` command to cleanly uninstall optimizations
+- `diff` command to show exact changes before applying
+- Rollback verification (apply -> rollback -> compare)
+- Real-world config corpus testing (50+ configs)
+- `--no-color` flag for CI environments
+
+### v0.11.x - Smart Config Parsing (Path B)
+- AWK-based config AST parsing (analyze before modifying)
+- Conflict detection (warn if directive already exists)
+- Profile system (`--profile conservative|balanced|aggressive`)
+- Server sizing auto-detection (adjust values based on RAM/CPU)
+- Partial rollback (undo single feature)
+
+### v1.0.0 - Production Ready
+- Python crossplane integration for proper nginx config parsing
+- Multi-server support
+- Ansible role/playbook
+- APT/DEB and RPM packages
+
+See [ROADMAP.md](ROADMAP.md) and [docs/PRODUCTION-READINESS.md](docs/PRODUCTION-READINESS.md) for full details.
 
 ## Contributing
 
