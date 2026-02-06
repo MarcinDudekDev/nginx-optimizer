@@ -1,10 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="700" height="542">
-  <defs>
-    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
-      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-opacity="0.3"/>
-    </filter>
-  </defs>
-  <rect width="700" height="542" rx="10" fill="#282C34" filter="url(#shadow)"/>
+  <rect width="700" height="542" rx="10" fill="#282C34"/>
   <rect width="700" height="40" rx="10" fill="#21252B"/>
   <rect x="0" y="30" width="700" height="10" fill="#21252B"/>
   <circle cx="20" cy="20" r="6" fill="#E06C75"/>

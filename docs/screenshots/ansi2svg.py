@@ -64,12 +64,7 @@ def generate_svg(lines_raw, title="Terminal", width=None):
 
     svg = []
     svg.append(f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}">')
-    svg.append('''  <defs>
-    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
-      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-opacity="0.3"/>
-    </filter>
-  </defs>''')
-    svg.append(f'  <rect width="{w}" height="{h}" rx="10" fill="#282C34" filter="url(#shadow)"/>')
+    svg.append(f'  <rect width="{w}" height="{h}" rx="10" fill="#282C34"/>')
     svg.append(f'  <rect width="{w}" height="{title_h}" rx="10" fill="#21252B"/>')
     svg.append(f'  <rect x="0" y="30" width="{w}" height="10" fill="#21252B"/>')
     # Window buttons
