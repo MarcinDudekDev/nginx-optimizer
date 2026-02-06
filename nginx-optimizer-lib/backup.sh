@@ -331,6 +331,14 @@ restore_backup() {
         manual_restore "$backup_path"
     fi
 
+    # Verify restored files match backup checksums
+    verify_restored_files "$backup_path"
+
+    # Clear state file since rollback restores previous config
+    if type -t clear_state_for_rollback &>/dev/null; then
+        clear_state_for_rollback
+    fi
+
     log_success "Backup restored successfully!"
 }
 
@@ -401,6 +409,88 @@ manual_restore() {
         else
             log_error "Configuration test failed!"
             exit 1
+        fi
+    fi
+}
+
+################################################################################
+# Rollback Verification
+################################################################################
+
+# Cross-platform checksum helper (prefers SHA-256, falls back to MD5)
+_file_checksum() {
+    local file="$1"
+    if command -v sha256sum &>/dev/null; then
+        sha256sum "$file" 2>/dev/null | cut -d' ' -f1
+    elif command -v shasum &>/dev/null; then
+        shasum -a 256 "$file" 2>/dev/null | cut -d' ' -f1
+    elif command -v md5sum &>/dev/null; then
+        md5sum "$file" 2>/dev/null | cut -d' ' -f1
+    elif command -v md5 &>/dev/null; then
+        md5 -q "$file" 2>/dev/null
+    else
+        # Weak fallback: size+mtime (not cryptographic)
+        log_warn "No hash tool found — using weak file size+mtime comparison"
+        stat -f '%z-%m' "$file" 2>/dev/null || stat -c '%s-%Y' "$file" 2>/dev/null || echo "unknown"
+    fi
+}
+
+# Verify restored files match backup checksums
+# Args: $1 = backup_path
+verify_restored_files() {
+    local backup_path="$1"
+    local verified=0
+    local mismatched=0
+
+    log_info "Verifying restored files..."
+
+    # Check each backed-up directory
+    local -a dir_pairs=()
+    [ -d "$backup_path/nginx" ] && dir_pairs+=("$backup_path/nginx|/etc/nginx")
+    [ -d "$backup_path/nginx-homebrew-intel" ] && dir_pairs+=("$backup_path/nginx-homebrew-intel|/usr/local/etc/nginx")
+    [ -d "$backup_path/nginx-homebrew-arm" ] && dir_pairs+=("$backup_path/nginx-homebrew-arm|/opt/homebrew/etc/nginx")
+    [ -d "$backup_path/wp-test-nginx" ] && dir_pairs+=("$backup_path/wp-test-nginx|$HOME/.wp-test/nginx")
+
+    for pair in "${dir_pairs[@]}"; do
+        local bak_dir="${pair%%|*}"
+        local cur_dir="${pair##*|}"
+        [ -d "$cur_dir" ] || continue
+
+        while IFS= read -r -d '' bak_file; do
+            local rel_path="${bak_file#$bak_dir/}"
+            local cur_file="$cur_dir/$rel_path"
+
+            if [ ! -f "$cur_file" ]; then
+                log_warn "Missing after restore: $cur_file"
+                mismatched=$((mismatched + 1))
+                continue
+            fi
+
+            local bak_sum cur_sum
+            bak_sum=$(_file_checksum "$bak_file")
+            cur_sum=$(_file_checksum "$cur_file")
+
+            if [ "$bak_sum" = "$cur_sum" ]; then
+                verified=$((verified + 1))
+            else
+                log_warn "Checksum mismatch: $cur_file"
+                mismatched=$((mismatched + 1))
+            fi
+        done < <(find "$bak_dir" -type f -print0 2>/dev/null)
+    done
+
+    if [ "$mismatched" -eq 0 ]; then
+        log_success "Verification passed: $verified files match backup"
+    else
+        log_warn "Verification: $verified matched, $mismatched mismatched"
+    fi
+
+    # Validate nginx config after restore
+    if command -v nginx &>/dev/null; then
+        if nginx -t 2>/dev/null; then
+            log_success "nginx -t validation passed after restore"
+        else
+            log_error "nginx -t validation FAILED after restore"
         fi
     fi
 }

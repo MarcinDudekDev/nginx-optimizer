@@ -16,7 +16,7 @@
 set -euo pipefail
 
 # Script version
-VERSION="0.9.1-beta"
+VERSION="0.10.0-beta"
 
 # Directories
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,6 +40,12 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
+# Respect NO_COLOR env var (https://no-color.org/) early — before any output
+# Flag-based --no-color is handled post-parse via apply_color_settings()
+if [[ -n "${NO_COLOR:-}" ]]; then
+    RED="" GREEN="" YELLOW="" BLUE="" CYAN="" NC=""
+fi
+
 # Options
 DRY_RUN=false
 # shellcheck disable=SC2034  # Used by sourced library files (compiler.sh, optimizer.sh)
@@ -51,6 +57,7 @@ SHOW_VERSION=false
 # shellcheck disable=SC2034  # Used by sourced library files (detector.sh)
 NO_CACHE=false
 CHECK_MODE=false
+NO_COLOR_FLAG=false
 SPECIFIC_FEATURE=""
 EXCLUDE_FEATURE=""
 # shellcheck disable=SC2034  # Used by sourced library files (backup.sh)
@@ -296,6 +303,9 @@ COMMANDS:
     honeypot-logs [hours]       Analyze honeypot logs (default: 24h)
     honeypot-export             Export attacker IPs for blocklists
     check [site]                Pre-flight readiness check (deps, config, features)
+    diff [timestamp]            Compare current config with backup
+    remove [--feature <name>]   Remove applied optimizations
+    verify                      Verify applied state matches running config
     fix-warnings                Detect and fix nginx config warnings
     update                      Self-update from git repository
     help                        Show this help message
@@ -311,6 +321,7 @@ OPTIONS:
     --backup-dir <path>         Custom backup directory
     --system-only               Only operate on system nginx (skip wp-test)
     --no-rate-limit             Disable rate limiting in security config
+    --no-color                  Disable colored output (also: NO_COLOR env var)
     --check                     Pre-flight check (same as 'check' command)
     -v, --version               Show version
 
@@ -390,7 +401,33 @@ show_version() {
 
 cmd_analyze() {
     if [ "$JSON_OUTPUT" = true ]; then
-        json_output "{\"command\": \"analyze\", \"version\": \"${VERSION}\", \"target\": \"${TARGET_SITE:-all}\", \"status\": \"placeholder\", \"message\": \"Full JSON output requires detector library refactoring\"}"
+        # Build real JSON from feature detection + state data
+        local json_features=""
+        if type -t feature_list &>/dev/null; then
+            local fid
+            while IFS= read -r fid; do
+                [ -z "$fid" ] && continue
+                local display
+                display=$(feature_get "$fid" "display" 2>/dev/null)
+                [ -z "$display" ] && display="$fid"
+                # Check if feature is in applied state
+                local applied="false"
+                if type -t get_applied_features &>/dev/null; then
+                    if get_applied_features "${TARGET_SITE:-all}" 2>/dev/null | grep -qx "$fid"; then
+                        applied="true"
+                    fi
+                fi
+                local entry
+                entry=$(printf '"%s":{"display":"%s","applied":%s}' "$fid" "$display" "$applied")
+                if [ -n "$json_features" ]; then
+                    json_features="${json_features},${entry}"
+                else
+                    json_features="$entry"
+                fi
+            done < <(feature_list)
+        fi
+        json_output "$(printf '{"command":"analyze","version":"%s","target":"%s","features":{%s}}' \
+            "$VERSION" "${TARGET_SITE:-all}" "$json_features")"
         return 0
     fi
 
@@ -490,19 +527,19 @@ cmd_test() {
 
 cmd_status() {
     if [ "$JSON_OUTPUT" = true ]; then
-        # Minimal JSON output for status
-        local json_result
-        json_result=$(cat <<EOF
-{
-  "command": "status",
-  "version": "${VERSION}",
-  "target": "${TARGET_SITE:-all}",
-  "status": "ok",
-  "message": "Use non-JSON mode for detailed optimization analysis"
-}
-EOF
-)
-        json_output "$json_result"
+        # Build JSON from state file data
+        local applied_json="[]"
+        if type -t load_applied_state &>/dev/null; then
+            local state
+            state=$(load_applied_state)
+            if command -v jq &>/dev/null; then
+                applied_json=$(echo "$state" | jq -c '.applied')
+            else
+                applied_json=$(echo "$state" | sed 's/.*"applied"://' | sed 's/}$//')
+            fi
+        fi
+        json_output "$(printf '{"command":"status","version":"%s","target":"%s","applied":%s}' \
+            "$VERSION" "${TARGET_SITE:-all}" "$applied_json")"
         return 0
     fi
 
@@ -518,18 +555,43 @@ EOF
 
 cmd_list() {
     if [ "$JSON_OUTPUT" = true ]; then
-        # Minimal JSON - actual detection would need refactoring
-        local json_result
-        json_result=$(cat <<EOF
-{
-  "command": "list",
-  "version": "${VERSION}",
-  "status": "ok",
-  "message": "JSON list output not fully implemented. Use non-JSON mode."
-}
-EOF
-)
-        json_output "$json_result"
+        # Build JSON from detected instances
+        local instances_json=""
+        if [ ${#DETECTED_INSTANCES[@]} -gt 0 ] 2>/dev/null; then
+            for inst in "${DETECTED_INSTANCES[@]}"; do
+                local itype iname ipath
+                itype="${inst%%:*}"
+                local rest="${inst#*:}"
+                iname="${rest%%:*}"
+                ipath="${rest#*:}"
+                local entry
+                entry=$(printf '{"type":"%s","name":"%s","path":"%s"}' "$itype" "$iname" "$ipath")
+                if [ -n "$instances_json" ]; then
+                    instances_json="${instances_json},${entry}"
+                else
+                    instances_json="$entry"
+                fi
+            done
+        fi
+        # Also list registered features
+        local features_json=""
+        if type -t feature_list_all &>/dev/null; then
+            local line
+            while IFS= read -r line; do
+                [ -z "$line" ] && continue
+                local fid="${line%%|*}"
+                local fdisplay="${line#*|}"
+                local entry
+                entry=$(printf '{"id":"%s","display":"%s"}' "$fid" "$fdisplay")
+                if [ -n "$features_json" ]; then
+                    features_json="${features_json},${entry}"
+                else
+                    features_json="$entry"
+                fi
+            done < <(feature_list_all)
+        fi
+        json_output "$(printf '{"command":"list","version":"%s","instances":[%s],"features":[%s]}' \
+            "$VERSION" "$instances_json" "$features_json")"
         return 0
     fi
 
@@ -579,6 +641,43 @@ cmd_compile() {
 }
 
 cmd_check() {
+    if [ "$JSON_OUTPUT" = true ]; then
+        # Build JSON check output
+        local prereqs_json=""
+        for cmd in rsync curl jq; do
+            local found="false"
+            command -v "$cmd" &>/dev/null && found="true"
+            local entry
+            entry=$(printf '{"name":"%s","found":%s}' "$cmd" "$found")
+            if [ -n "$prereqs_json" ]; then
+                prereqs_json="${prereqs_json},${entry}"
+            else
+                prereqs_json="$entry"
+            fi
+        done
+        local nginx_ready="false"
+        if command -v nginx &>/dev/null && nginx -t 2>/dev/null; then
+            nginx_ready="true"
+        fi
+        local features_json=""
+        if type -t feature_list &>/dev/null; then
+            local fid
+            while IFS= read -r fid; do
+                [ -z "$fid" ] && continue
+                local entry
+                entry=$(printf '"%s"' "$fid")
+                if [ -n "$features_json" ]; then
+                    features_json="${features_json},${entry}"
+                else
+                    features_json="$entry"
+                fi
+            done < <(feature_list)
+        fi
+        json_output "$(printf '{"command":"check","version":"%s","ready":%s,"prerequisites":[%s],"features":[%s]}' \
+            "$VERSION" "$nginx_ready" "$prereqs_json" "$features_json")"
+        return 0
+    fi
+
     # Show header
     if type -t ui_header &>/dev/null; then
         ui_header
@@ -677,6 +776,335 @@ cmd_check() {
             log_error "$issues issue(s) found. Review above before optimizing."
         fi
         return 1
+    fi
+}
+
+cmd_remove() {
+    local feature_to_remove="${SPECIFIC_FEATURE:-}"
+
+    if [ -z "$feature_to_remove" ]; then
+        # Show what's applied and ask
+        if type -t get_applied_features &>/dev/null; then
+            local applied
+            applied=$(get_applied_features "${TARGET_SITE:-all}")
+            if [ -z "$applied" ]; then
+                log_info "No features currently tracked as applied"
+                log_info "Use: nginx-optimizer remove --feature <name>"
+                return 0
+            fi
+            log_info "Currently applied features:"
+            echo "$applied" | while IFS= read -r f; do
+                echo "  - $f"
+            done
+            echo ""
+            log_info "Use: nginx-optimizer remove --feature <name> to remove specific feature"
+        else
+            log_error "State tracking not available"
+            exit 1
+        fi
+        return 0
+    fi
+
+    # Resolve feature alias to ID
+    local feature_id=""
+    if type -t feature_get_by_alias &>/dev/null; then
+        feature_id=$(feature_get_by_alias "$feature_to_remove" 2>/dev/null)
+    fi
+    if [ -z "$feature_id" ]; then
+        log_error "Unknown feature: $feature_to_remove"
+        exit 1
+    fi
+
+    local display_name
+    display_name=$(feature_get "$feature_id" "display" 2>/dev/null)
+    [ -z "$display_name" ] && display_name="$feature_id"
+
+    # Create safety backup before removing
+    if [ "$DRY_RUN" = false ]; then
+        if type -t create_backup &>/dev/null; then
+            log_info "Creating safety backup before removal..."
+            create_backup "$TARGET_SITE"
+        fi
+    fi
+
+    if type -t ui_header &>/dev/null; then
+        ui_header
+        if [ "$DRY_RUN" = true ]; then
+            ui_warn_box "DRY RUN - No changes will be made"
+        fi
+        ui_context "Removing" "$display_name"
+        ui_blank
+    else
+        log_info "Removing $display_name..."
+    fi
+
+    # Remove via registry
+    if type -t feature_remove &>/dev/null; then
+        if feature_remove "$feature_id" "$TARGET_SITE"; then
+            if type -t ui_step &>/dev/null; then
+                ui_step "$display_name removed"
+            else
+                log_success "$display_name removed"
+            fi
+
+            # Validate nginx config after removal
+            if [ "$DRY_RUN" = false ]; then
+                if command -v nginx &>/dev/null; then
+                    if ! nginx -t 2>/dev/null; then
+                        log_error "nginx -t failed after removal — rolling back"
+                        if type -t restore_backup &>/dev/null && [ -n "${CURRENT_BACKUP_DIR:-}" ]; then
+                            FORCE=true restore_backup "$(basename "$CURRENT_BACKUP_DIR")"
+                        fi
+                        exit 1
+                    fi
+                fi
+
+                # Update state file
+                if type -t save_applied_state &>/dev/null && [ -f "${STATE_FILE:-}" ]; then
+                    # Remove entry from state
+                    if command -v jq &>/dev/null; then
+                        local temp_state
+                        temp_state=$(mktemp)
+                        jq -c --arg fid "$feature_id" \
+                            '.applied = [.applied[] | select(.feature != $fid)]' \
+                            "$STATE_FILE" > "$temp_state"
+                        mv "$temp_state" "$STATE_FILE"
+                    else
+                        # Rebuild without this feature
+                        local entries=""
+                        local line
+                        while IFS= read -r line; do
+                            if echo "$line" | grep -q "\"feature\":\"${feature_id}\""; then
+                                continue
+                            fi
+                            if [ -n "$entries" ]; then
+                                entries="${entries},${line}"
+                            else
+                                entries="$line"
+                            fi
+                        done < <(_parse_state_entries)
+                        printf '{"applied":[%s]}\n' "$entries" > "$STATE_FILE"
+                    fi
+                fi
+
+                # Reload nginx
+                if type -t validate_and_reload &>/dev/null; then
+                    validate_and_reload "$TARGET_SITE"
+                fi
+            fi
+        else
+            log_info "$display_name is not currently applied or could not be removed"
+        fi
+    else
+        log_error "Feature registry not loaded"
+        exit 1
+    fi
+}
+
+cmd_verify() {
+    if type -t ui_header &>/dev/null; then
+        ui_header
+        ui_context "Verifying" "Applied state vs running config"
+        ui_blank
+    else
+        log_info "Verifying applied state against running configuration..."
+    fi
+
+    # Load state
+    if ! type -t get_applied_features &>/dev/null; then
+        log_error "State tracking not available"
+        exit 1
+    fi
+
+    local applied
+    applied=$(get_applied_features "${TARGET_SITE:-}")
+
+    if [ -z "$applied" ]; then
+        log_info "No features tracked in state file"
+        log_info "Run 'optimize' first to build state, or state was cleared by rollback"
+        return 0
+    fi
+
+    local v_ok=0
+    local v_drift=0
+    local v_miss=0
+
+    # For each feature marked as applied, check if still detected
+    while IFS= read -r feature_id; do
+        [ -z "$feature_id" ] && continue
+        local display_name
+        display_name=$(feature_get "$feature_id" "display" 2>/dev/null)
+        [ -z "$display_name" ] && display_name="$feature_id"
+
+        # Check if feature template or pattern is still present
+        local still_present=false
+
+        # Check template in conf.d
+        local template
+        template=$(feature_get "$feature_id" "template" 2>/dev/null)
+        if [ -n "$template" ]; then
+            if type -t get_nginx_confd_dir &>/dev/null; then
+                local confd_dir
+                confd_dir=$(get_nginx_confd_dir)
+                if [ -n "$confd_dir" ] && [ -f "$confd_dir/$template" ]; then
+                    still_present=true
+                fi
+            fi
+            # Also check wp-test
+            local wp_nginx="${WP_TEST_NGINX:-$HOME/.wp-test/nginx}"
+            if [ -f "$wp_nginx/conf.d/$template" ]; then
+                still_present=true
+            fi
+        fi
+
+        if [ "$still_present" = true ]; then
+            v_ok=$((v_ok + 1))
+            if type -t ui_step &>/dev/null; then
+                ui_step "$display_name: verified"
+            else
+                log_success "  $display_name: verified"
+            fi
+        else
+            v_miss=$((v_miss + 1))
+            if type -t ui_step_fail &>/dev/null; then
+                ui_step_fail "$display_name" "missing (state says applied but not found)"
+            else
+                log_warn "  $display_name: MISSING (state says applied)"
+            fi
+        fi
+    done <<< "$applied"
+
+    # Check for drift: features detected but NOT in state
+    if type -t feature_list &>/dev/null; then
+        local fid
+        while IFS= read -r fid; do
+            [ -z "$fid" ] && continue
+            # Skip if already in applied list
+            if echo "$applied" | grep -qx "$fid"; then
+                continue
+            fi
+            # Check if feature template exists (simple presence check)
+            local tmpl
+            tmpl=$(feature_get "$fid" "template" 2>/dev/null)
+            if [ -n "$tmpl" ]; then
+                local tmpl_found=false
+                if type -t get_nginx_confd_dir &>/dev/null; then
+                    local confd
+                    confd=$(get_nginx_confd_dir)
+                    [ -n "$confd" ] && [ -f "$confd/$tmpl" ] && tmpl_found=true
+                fi
+                local wpn="${WP_TEST_NGINX:-$HOME/.wp-test/nginx}"
+                [ -f "$wpn/conf.d/$tmpl" ] && tmpl_found=true
+
+                if [ "$tmpl_found" = true ]; then
+                    v_drift=$((v_drift + 1))
+                    local dn
+                    dn=$(feature_get "$fid" "display" 2>/dev/null)
+                    [ -z "$dn" ] && dn="$fid"
+                    if type -t ui_step_pending &>/dev/null; then
+                        ui_step_pending "$dn: drift (found but not in state)"
+                    else
+                        log_warn "  $dn: DRIFT (present but not tracked)"
+                    fi
+                fi
+            fi
+        done < <(feature_list)
+    fi
+
+    # Summary
+    echo ""
+    if [ "$v_miss" -eq 0 ] && [ "$v_drift" -eq 0 ]; then
+        if type -t ui_success_box &>/dev/null; then
+            ui_success_box "Verification passed" "$v_ok feature(s) verified, 0 issues"
+        else
+            log_success "$v_ok feature(s) verified, no issues"
+        fi
+        return 0
+    else
+        log_info "$v_ok verified, $v_drift drifted, $v_miss missing"
+        return 1
+    fi
+}
+
+cmd_diff() {
+    local backup_timestamp="${TARGET_SITE:-}"
+
+    local backup_path=""
+    if [ -n "$backup_timestamp" ]; then
+        # Validate backup timestamp format
+        if [[ ! "$backup_timestamp" =~ ^[0-9]{8}-[0-9]{6}$ ]]; then
+            log_error "Invalid backup timestamp format: $backup_timestamp"
+            log_error "Expected format: YYYYMMDD-HHMMSS (e.g., 20250124-143022)"
+            exit 1
+        fi
+        backup_path="${BACKUP_DIR}/${backup_timestamp}"
+        if [ ! -d "$backup_path" ]; then
+            log_error "Backup not found: $backup_path"
+            exit 1
+        fi
+    else
+        # Find most recent backup
+        if [ ! -d "$BACKUP_DIR" ]; then
+            log_info "No backups found in $BACKUP_DIR"
+            return 0
+        fi
+        local latest
+        latest=$(ls -1t "$BACKUP_DIR" 2>/dev/null | head -1)
+        if [ -z "$latest" ]; then
+            log_info "No backups found"
+            return 0
+        fi
+        backup_path="${BACKUP_DIR}/${latest}"
+        log_info "Comparing against most recent backup: $latest"
+    fi
+
+    # Determine diff command (prefer colordiff if available and colors enabled)
+    local diff_cmd="diff"
+    local diff_opts="-u"
+    if [ -z "${NO_COLOR:-}$NO_COLOR_FLAG" ] || { [ "$NO_COLOR_FLAG" != "true" ] && [ -z "${NO_COLOR:-}" ]; }; then
+        if command -v colordiff &>/dev/null; then
+            diff_cmd="colordiff"
+        elif diff --color=auto /dev/null /dev/null 2>/dev/null; then
+            diff_opts="-u --color=auto"
+        fi
+    fi
+
+    local has_diff=false
+
+    # Compare each backed-up directory against its current location
+    local -a dir_pairs=()
+    [ -d "$backup_path/nginx" ] && dir_pairs+=("$backup_path/nginx|/etc/nginx")
+    [ -d "$backup_path/nginx-homebrew-intel" ] && dir_pairs+=("$backup_path/nginx-homebrew-intel|/usr/local/etc/nginx")
+    [ -d "$backup_path/nginx-homebrew-arm" ] && dir_pairs+=("$backup_path/nginx-homebrew-arm|/opt/homebrew/etc/nginx")
+    [ -d "$backup_path/wp-test-nginx" ] && dir_pairs+=("$backup_path/wp-test-nginx|$HOME/.wp-test/nginx")
+
+    for pair in "${dir_pairs[@]}"; do
+        local bak_dir="${pair%%|*}"
+        local cur_dir="${pair##*|}"
+
+        [ -d "$cur_dir" ] || continue
+
+        echo ""
+        log_info "Comparing: $cur_dir"
+        echo "---"
+
+        local diff_output
+        diff_output=$($diff_cmd $diff_opts -r "$bak_dir" "$cur_dir" 2>/dev/null || true)
+        if [ -n "$diff_output" ]; then
+            echo "$diff_output"
+            has_diff=true
+        else
+            echo "  No differences"
+        fi
+    done
+
+    echo ""
+    if [ "$has_diff" = true ]; then
+        log_info "Differences found between backup and current config"
+        return 1
+    else
+        log_success "No differences found"
+        return 0
     fi
 }
 
@@ -862,7 +1290,7 @@ parse_arguments() {
 
     while [ $# -gt 0 ]; do
         case "$1" in
-            analyze|optimize|compile|rollback|test|status|list|benchmark|check|help|update|honeypot|honeypot-logs|honeypot-export|honeypot-fail2ban|fix-warnings)
+            analyze|optimize|compile|rollback|test|status|list|benchmark|check|diff|remove|verify|help|update|honeypot|honeypot-logs|honeypot-export|honeypot-fail2ban|fix-warnings)
                 COMMAND="$1"
                 shift
                 ;;
@@ -950,6 +1378,10 @@ parse_arguments() {
                 export NO_RATE_LIMIT
                 shift
                 ;;
+            --no-color)
+                NO_COLOR_FLAG=true
+                shift
+                ;;
             --check)
                 CHECK_MODE=true
                 DRY_RUN=true
@@ -997,6 +1429,18 @@ parse_arguments() {
 }
 
 ################################################################################
+# Color Settings (applied after argument parsing)
+################################################################################
+
+apply_color_settings() {
+    # Disable colors if --no-color flag was passed or stdout is not a terminal
+    if [[ "$NO_COLOR_FLAG" == "true" ]] || [[ ! -t 1 ]]; then
+        # shellcheck disable=SC2034  # CYAN used by sourced library files (ui.sh, detector.sh)
+        RED="" GREEN="" YELLOW="" BLUE="" CYAN="" NC=""
+    fi
+}
+
+################################################################################
 # Main Function
 ################################################################################
 
@@ -1006,6 +1450,9 @@ main() {
 
     # Parse arguments early to know if quiet mode is enabled
     parse_arguments "$@"
+
+    # Apply color settings after parsing (handles --no-color and pipe detection)
+    apply_color_settings
 
     # Acquire lock to prevent race conditions
     acquire_lock
@@ -1062,6 +1509,15 @@ main() {
             ;;
         check)
             cmd_check
+            ;;
+        diff)
+            cmd_diff
+            ;;
+        remove)
+            cmd_remove
+            ;;
+        verify)
+            cmd_verify
             ;;
         honeypot)
             cmd_honeypot

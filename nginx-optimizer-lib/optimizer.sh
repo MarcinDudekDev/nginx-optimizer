@@ -473,6 +473,131 @@ transaction_rollback() {
 }
 
 ################################################################################
+# State Tracking (persistent record of applied optimizations)
+################################################################################
+
+STATE_FILE="${DATA_DIR}/state.json"
+
+# Save applied feature state to persistent JSON file
+# Usage: save_applied_state "feature_id" "site_name" "backup_timestamp"
+save_applied_state() {
+    local feature_id="$1"
+    local site_name="${2:-all}"
+    local backup_ts="${3:-}"
+    local timestamp
+    timestamp=$(date '+%Y%m%d-%H%M%S')
+
+    # Build new entry
+    local entry
+    entry=$(printf '{"feature":"%s","site":"%s","timestamp":"%s","backup":"%s"}' \
+        "$feature_id" "$site_name" "$timestamp" "$backup_ts")
+
+    if [ ! -f "$STATE_FILE" ]; then
+        # Create new state file
+        printf '{"applied":[%s]}\n' "$entry" > "$STATE_FILE"
+    else
+        # Append to existing applied array
+        # Remove trailing }], add new entry, close array
+        local existing
+        existing=$(cat "$STATE_FILE")
+        # Remove duplicate: same feature+site
+        local filtered
+        if command -v jq &>/dev/null; then
+            filtered=$(echo "$existing" | jq -c \
+                --arg fid "$feature_id" --arg site "$site_name" \
+                '.applied = [.applied[] | select(.feature != $fid or .site != $site)]')
+            echo "$filtered" | jq -c ".applied += [$entry]" > "$STATE_FILE"
+        else
+            # No jq: rebuild with grep/sed
+            # Remove old entry for same feature+site, append new
+            local temp_state
+            temp_state=$(secure_mktemp)
+            # Extract existing entries, filter out matching feature+site
+            local entries=""
+            local line
+            while IFS= read -r line; do
+                # Skip lines matching this feature+site combo
+                if echo "$line" | grep -q "\"feature\":\"${feature_id}\"" && \
+                   echo "$line" | grep -q "\"site\":\"${site_name}\""; then
+                    continue
+                fi
+                if [ -n "$entries" ]; then
+                    entries="${entries},${line}"
+                else
+                    entries="$line"
+                fi
+            done < <(_parse_state_entries)
+            if [ -n "$entries" ]; then
+                printf '{"applied":[%s,%s]}\n' "$entries" "$entry" > "$temp_state"
+            else
+                printf '{"applied":[%s]}\n' "$entry" > "$temp_state"
+            fi
+            mv "$temp_state" "$STATE_FILE"
+        fi
+    fi
+}
+
+# Load applied state - outputs entries one per line
+# Usage: _parse_state_entries
+_parse_state_entries() {
+    [ ! -f "$STATE_FILE" ] && return 0
+    if command -v jq &>/dev/null; then
+        jq -c '.applied[]' "$STATE_FILE" 2>/dev/null
+    else
+        # Fallback: extract JSON objects from applied array
+        sed 's/.*\[//;s/\].*//' "$STATE_FILE" | tr ',' '\n' | grep '{'
+    fi
+}
+
+# Get list of applied features for a site
+# Usage: get_applied_features [site_name]
+# Prints: feature_id per line
+get_applied_features() {
+    local site_filter="${1:-}"
+    [ ! -f "$STATE_FILE" ] && return 0
+    if command -v jq &>/dev/null; then
+        if [ -n "$site_filter" ]; then
+            jq -r --arg site "$site_filter" \
+                '.applied[] | select(.site == $site) | .feature' "$STATE_FILE" 2>/dev/null
+        else
+            jq -r '.applied[].feature' "$STATE_FILE" 2>/dev/null
+        fi
+    else
+        # Fallback: grep-based parsing
+        _parse_state_entries | while IFS= read -r entry; do
+            if [ -n "$site_filter" ]; then
+                if echo "$entry" | grep -q "\"site\":\"${site_filter}\""; then
+                    echo "$entry" | sed 's/.*"feature":"\([^"]*\)".*/\1/'
+                fi
+            else
+                echo "$entry" | sed 's/.*"feature":"\([^"]*\)".*/\1/'
+            fi
+        done
+    fi
+}
+
+# Load full state as JSON (for JSON output mode)
+# Usage: load_applied_state
+# Prints: full state JSON
+load_applied_state() {
+    if [ -f "$STATE_FILE" ]; then
+        cat "$STATE_FILE"
+    else
+        echo '{"applied":[]}'
+    fi
+}
+
+# Clear state entries for features that were rolled back
+# Usage: clear_state_for_rollback
+clear_state_for_rollback() {
+    if [ -f "$STATE_FILE" ]; then
+        # Reset to empty - rollback restores everything
+        printf '{"applied":[]}\n' > "$STATE_FILE"
+        log_to_file "INFO" "State file cleared after rollback"
+    fi
+}
+
+################################################################################
 # Cache Management
 ################################################################################
 
@@ -829,6 +954,12 @@ apply_optimizations() {
         # Apply feature via registry
         if feature_apply "$feature_id" "$target_site"; then
             APPLIED_OPTIMIZATIONS+=("$display_name")
+            # Persist to state file (get backup timestamp from CURRENT_BACKUP_DIR)
+            local backup_ts=""
+            if [ -n "${CURRENT_BACKUP_DIR:-}" ]; then
+                backup_ts=$(basename "$CURRENT_BACKUP_DIR")
+            fi
+            save_applied_state "$feature_id" "${target_site:-all}" "$backup_ts"
             if type -t ui_step &>/dev/null; then
                 ui_step "$display_name applied"
             else

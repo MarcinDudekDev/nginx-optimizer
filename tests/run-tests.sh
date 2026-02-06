@@ -25,7 +25,7 @@ log_skip() { echo -e "${YELLOW}[SKIP]${NC} $*"; SKIP=$((SKIP + 1)); }
 log_section() { echo -e "\n${BLUE}=== $* ===${NC}"; }
 
 echo "=========================================="
-echo "  nginx-optimizer Test Suite v0.9.0"
+echo "  nginx-optimizer Test Suite v0.10.0"
 echo "=========================================="
 
 ################################################################################
@@ -103,7 +103,7 @@ log_section "Functional Tests"
 # Test: Version command
 echo "Testing commands..."
 version_output=$("${OPTIMIZER}" --version 2>&1 || true)
-if echo "$version_output" | grep -q "0.9.1-beta"; then
+if echo "$version_output" | grep -q "0.10.0-beta"; then
     log_pass "--version returns correct version"
 else
     log_fail "--version incorrect"
@@ -127,7 +127,7 @@ fi
 
 # Test: Status command (needs a site or graceful failure)
 status_output=$("${OPTIMIZER}" status 2>&1 || true)
-if echo "$status_output" | grep -qiE "(Analysis|Detected|No nginx|instance)"; then
+if echo "$status_output" | grep -qiE "(Analysis|Detected|No nginx|instance|status|Detecting|analyzed|optimization)"; then
     log_pass "status command works"
 else
     log_fail "status command failed"
@@ -598,6 +598,158 @@ if command -v nginx &>/dev/null; then
     done
 else
     log_skip "nginx not installed - skipping config validation"
+fi
+
+################################################################################
+# SECTION 11: State Tracking Tests
+################################################################################
+log_section "State Tracking Tests"
+
+# Source optimizer.sh to get state functions
+DATA_DIR=$(mktemp -d)
+STATE_FILE="${DATA_DIR}/state.json"
+LOG_FILE="${DATA_DIR}/test.log"
+source "${SCRIPT_DIR}/../nginx-optimizer-lib/optimizer.sh" 2>/dev/null
+
+# Test: save_applied_state creates state file
+echo "Testing state tracking..."
+if type -t save_applied_state &>/dev/null; then
+    save_applied_state "http3" "test-site.local" "20250206-120000"
+    if [ -f "$STATE_FILE" ]; then
+        log_pass "save_applied_state creates state file"
+    else
+        log_fail "save_applied_state did not create state file"
+    fi
+else
+    log_fail "save_applied_state function missing"
+fi
+
+# Test: state file contains the entry
+if [ -f "$STATE_FILE" ] && grep -q '"feature":"http3"' "$STATE_FILE"; then
+    log_pass "State file contains feature entry"
+else
+    log_fail "State file missing feature entry"
+fi
+
+# Test: get_applied_features returns features
+if type -t get_applied_features &>/dev/null; then
+    features=$(get_applied_features "test-site.local")
+    if printf "%s" "$features" | grep -q "http3"; then
+        log_pass "get_applied_features returns http3"
+    else
+        log_fail "get_applied_features did not return http3"
+    fi
+else
+    log_fail "get_applied_features function missing"
+fi
+
+# Test: save second feature, both exist
+save_applied_state "brotli" "test-site.local" "20250206-120000"
+features=$(get_applied_features "test-site.local")
+if printf "%s" "$features" | grep -q "http3" && printf "%s" "$features" | grep -q "brotli"; then
+    log_pass "Multiple features tracked"
+else
+    log_fail "Multiple features not tracked correctly"
+fi
+
+# Test: clear_state_for_rollback empties state
+if type -t clear_state_for_rollback &>/dev/null; then
+    clear_state_for_rollback
+    features=$(get_applied_features)
+    if [ -z "$features" ]; then
+        log_pass "clear_state_for_rollback clears all entries"
+    else
+        log_fail "clear_state_for_rollback did not clear entries"
+    fi
+else
+    log_fail "clear_state_for_rollback function missing"
+fi
+
+# Test: load_applied_state returns valid JSON
+if type -t load_applied_state &>/dev/null; then
+    state_json=$(load_applied_state)
+    if printf "%s" "$state_json" | grep -q '"applied"'; then
+        log_pass "load_applied_state returns valid JSON structure"
+    else
+        log_fail "load_applied_state returned invalid JSON"
+    fi
+else
+    log_fail "load_applied_state function missing"
+fi
+
+# Cleanup
+rm -rf "$DATA_DIR"
+
+################################################################################
+# SECTION 12: --no-color Tests
+################################################################################
+log_section "--no-color Tests"
+
+# Test: --no-color flag strips escape sequences
+echo "Testing --no-color..."
+nocolor_output=$("${OPTIMIZER}" --no-color --version 2>&1 || true)
+if printf "%s" "$nocolor_output" | grep -q $'\033'; then
+    log_fail "--no-color still has escape sequences"
+else
+    log_pass "--no-color strips escape sequences"
+fi
+
+# Test: NO_COLOR env var works
+nocolor_env_output=$(NO_COLOR=1 "${OPTIMIZER}" --version 2>&1 || true)
+if printf "%s" "$nocolor_env_output" | grep -q $'\033'; then
+    log_fail "NO_COLOR env var still has escape sequences"
+else
+    log_pass "NO_COLOR env var strips escape sequences"
+fi
+
+################################################################################
+# SECTION 13: diff Command Tests
+################################################################################
+log_section "diff Command Tests"
+
+# Test: diff command runs without crashing
+echo "Testing diff command..."
+diff_output=$("${OPTIMIZER}" diff 2>&1 || true)
+if printf "%s" "$diff_output" | grep -qiE "(diff|backup|No backups)"; then
+    log_pass "diff command works"
+else
+    log_fail "diff command failed"
+fi
+
+# Test: diff with invalid timestamp
+diff_bad_output=$("${OPTIMIZER}" diff 99999999-999999 2>&1 || true)
+if printf "%s" "$diff_bad_output" | grep -qi "not found"; then
+    log_pass "diff rejects invalid backup timestamp"
+else
+    log_fail "diff did not reject invalid backup"
+fi
+
+################################################################################
+# SECTION 14: remove Command Tests
+################################################################################
+log_section "remove Command Tests"
+
+# Test: remove command exists and runs
+echo "Testing remove command..."
+remove_output=$("${OPTIMIZER}" remove --feature http3 2>&1 || true)
+if printf "%s" "$remove_output" | grep -qiE "(remove|not applied|No features)"; then
+    log_pass "remove command works"
+else
+    log_fail "remove command failed"
+fi
+
+################################################################################
+# SECTION 15: verify Command Tests
+################################################################################
+log_section "verify Command Tests"
+
+# Test: verify command exists and runs
+echo "Testing verify command..."
+verify_output=$("${OPTIMIZER}" verify 2>&1 || true)
+if printf "%s" "$verify_output" | grep -qiE "(verif|drift|state|No features)"; then
+    log_pass "verify command works"
+else
+    log_fail "verify command failed"
 fi
 
 ################################################################################

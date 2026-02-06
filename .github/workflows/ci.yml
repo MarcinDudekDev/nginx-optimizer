@@ -80,7 +80,7 @@ jobs:
         run: |
           version=$(./nginx-optimizer.sh --version 2>&1)
           echo "Version: $version"
-          echo "$version" | grep -q "0.9.1-beta" || exit 1
+          echo "$version" | grep -q "0.10.0-beta" || exit 1
 
       - name: Test help command
         run: ./nginx-optimizer.sh help | grep -q "COMMANDS:"
@@ -90,6 +90,17 @@ jobs:
 
       - name: Test check command
         run: ./nginx-optimizer.sh check 2>&1 | grep -qiE "(check|ready|issue|Prerequisites)"
+
+      - name: Test diff command
+        run: ./nginx-optimizer.sh diff 2>&1 | grep -qiE "(diff|backup|No backups)"
+
+      - name: Test verify command
+        run: ./nginx-optimizer.sh verify 2>&1 | grep -qiE "(verify|Verification|No state|features)"
+
+      - name: Test --no-color flag
+        run: |
+          output=$(./nginx-optimizer.sh --no-color --version 2>&1 | cat -v)
+          if echo "$output" | grep -q '\[0;'; then echo "FAIL: escape codes found in --no-color output"; exit 1; fi
 
       - name: Docker nginx validation
         if: matrix.os == 'ubuntu-latest'

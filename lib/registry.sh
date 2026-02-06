@@ -356,6 +356,121 @@ feature_apply() {
 }
 
 ################################################################################
+# Feature Removal
+################################################################################
+
+# feature_remove - Remove an applied feature
+# Args: $1 = feature_id, $2 = target_site (optional)
+# Returns: 0 on success, 1 on error
+feature_remove() {
+    local id="$1"
+    local target_site="${2:-}"
+
+    [[ -z "$id" ]] && return 1
+
+    # Get feature data
+    local entry
+    entry=$(_find_feature "$id")
+    [[ -z "$entry" ]] && {
+        echo "ERROR: Feature '$id' not registered" >&2
+        return 1
+    }
+
+    # Check for custom remove function
+    local func_id
+    func_id=$(_normalize_id_for_func "$id")
+    if declare -f "feature_remove_custom_${func_id}" &>/dev/null; then
+        "feature_remove_custom_${func_id}" "$target_site"
+        return $?
+    fi
+
+    # Default removal: remove template files and include directives
+    local template
+    template=$(_get_field "$entry" "$FIELD_TEMPLATE")
+
+    if [[ -z "$template" ]]; then
+        echo "ERROR: Feature '$id' has no template — custom remove function required" >&2
+        return 1
+    fi
+
+    local removed=false
+
+    # Escape template name for safe use in sed/grep patterns
+    local template_escaped
+    template_escaped=$(printf '%s' "$template" | sed 's/[[\.*^$/]/\\&/g')
+
+    # Remove from nginx conf.d
+    if type -t get_nginx_confd_dir &>/dev/null; then
+        local confd_dir
+        confd_dir=$(get_nginx_confd_dir)
+        if [[ -n "$confd_dir" ]] && [[ -f "$confd_dir/$template" ]]; then
+            if [[ "${DRY_RUN:-false}" == "true" ]]; then
+                echo "Would remove: $confd_dir/$template" >&2
+            else
+                rm -f "$confd_dir/$template"
+                removed=true
+            fi
+        fi
+    fi
+
+    # Remove from wp-test conf.d
+    local wp_test_nginx="${WP_TEST_NGINX:-$HOME/.wp-test/nginx}"
+    if [[ -f "$wp_test_nginx/conf.d/$template" ]]; then
+        if [[ "${DRY_RUN:-false}" == "true" ]]; then
+            echo "Would remove: $wp_test_nginx/conf.d/$template" >&2
+        else
+            rm -f "$wp_test_nginx/conf.d/$template"
+            removed=true
+        fi
+    fi
+
+    # Remove include directives from site configs
+    if type -t get_nginx_sites_dir &>/dev/null; then
+        local sites_dir
+        sites_dir=$(get_nginx_sites_dir)
+        if [[ -n "$sites_dir" ]] && [[ -d "$sites_dir" ]]; then
+            for site_conf in "$sites_dir"/*; do
+                [[ -f "$site_conf" ]] || continue
+                if grep -qF "$template" "$site_conf" 2>/dev/null; then
+                    if [[ "${DRY_RUN:-false}" == "true" ]]; then
+                        echo "Would remove include from: $(basename "$site_conf")" >&2
+                    else
+                        local use_sudo=""
+                        [[ ! -w "$site_conf" ]] && use_sudo="sudo"
+                        $use_sudo sed -i.rmback "/${template_escaped}/d" "$site_conf" 2>/dev/null || \
+                            $use_sudo sed -i '' "/${template_escaped}/d" "$site_conf" 2>/dev/null
+                        rm -f "${site_conf}.rmback" 2>/dev/null
+                        removed=true
+                    fi
+                fi
+            done
+        fi
+    fi
+
+    # Remove include from wp-test vhost.d
+    if [[ -d "$wp_test_nginx/vhost.d" ]]; then
+        for vhost_file in "$wp_test_nginx/vhost.d"/*; do
+            [[ -f "$vhost_file" ]] || continue
+            if grep -qF "$template" "$vhost_file" 2>/dev/null; then
+                if [[ "${DRY_RUN:-false}" == "true" ]]; then
+                    echo "Would remove include from vhost: $(basename "$vhost_file")" >&2
+                else
+                    sed -i.rmback "/${template_escaped}/d" "$vhost_file" 2>/dev/null || \
+                        sed -i '' "/${template_escaped}/d" "$vhost_file" 2>/dev/null
+                    rm -f "${vhost_file}.rmback" 2>/dev/null
+                    removed=true
+                fi
+            fi
+        done
+    fi
+
+    if [[ "$removed" == "true" ]] || [[ "${DRY_RUN:-false}" == "true" ]]; then
+        return 0
+    fi
+    return 1
+}
+
+################################################################################
 # Helper Functions
 ################################################################################
 
