@@ -197,8 +197,19 @@ nginx-optimizer/
     ├── opcache.ini
     └── bot-blocker-update.sh
 
+tests/
+├── run-tests.sh                # Unit test suite (70 tests)
+├── test-with-nginx.sh          # Docker-based nginx config validation
+└── configs/                    # 12 real-world test configs
+    ├── wordpress/              # WordPress, WooCommerce, SSL
+    ├── reverse-proxy/          # Proxy, load balancer
+    ├── complex/                # Multisite, modular includes
+    ├── edge-cases/             # Already-optimized, comments
+    └── minimal/                # Stock nginx, H5BP baseline
+
 ~/.nginx-optimizer/              # Data directory
 ├── backups/                    # Timestamped backups
+├── state.json                  # Applied optimization state
 ├── logs/                       # Optimization logs
 ├── benchmarks/                 # Performance test results
 └── scripts/                    # Monitoring scripts
@@ -621,7 +632,9 @@ nginx-optimizer v0.10.0-beta
 
 ## Roadmap
 
-### v0.10.x - Polish & Robustness (Completed)
+> **Current version: v0.10.0-beta** — We're here.
+
+### v0.10.x - Polish & Robustness &nbsp; ✅ Done
 - ~~`remove` command to cleanly uninstall optimizations~~
 - ~~`diff` command to show exact changes before applying~~
 - ~~Rollback verification (apply -> rollback -> compare)~~
@@ -629,15 +642,17 @@ nginx-optimizer v0.10.0-beta
 - ~~`--no-color` flag for CI environments~~
 - ~~State tracking file (`state.json`) for persistent optimization records~~
 - ~~Full JSON output for `analyze`, `status`, `list`, `check` commands~~
+- ~~12 real-world test configs with Docker-based nginx validation~~
 
-### v0.11.x - Smart Config Parsing (Path B)
+### v0.11.x - Smart Config Parsing
 - AWK-based config AST parsing (analyze before modifying)
 - Conflict detection (warn if directive already exists)
 - Profile system (`--profile conservative|balanced|aggressive`)
 - Server sizing auto-detection (adjust values based on RAM/CPU)
 - Partial rollback (undo single feature)
+- Expand test corpus to 50+ configs
 
-### v1.0.0 - Production Ready
+### v1.0.0 - Production Release
 - Python crossplane integration for proper nginx config parsing
 - Multi-server support
 - Ansible role/playbook
