@@ -444,8 +444,9 @@ cmd_analyze() {
     fi
 
     if type -t detect_nginx_instances &>/dev/null; then
-        detect_nginx_instances "$TARGET_SITE"
-        analyze_optimizations "$TARGET_SITE"
+        if detect_nginx_instances "$TARGET_SITE"; then
+            analyze_optimizations "$TARGET_SITE"
+        fi
     else
         if type -t ui_error_box &>/dev/null; then
             ui_error_box "Detector library not loaded. Run setup first."

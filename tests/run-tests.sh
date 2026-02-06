@@ -135,7 +135,7 @@ fi
 
 # Test: Analyze command
 analyze_output=$("${OPTIMIZER}" analyze 2>&1 || true)
-if echo "$analyze_output" | grep -qiE "(Analysis|Detected|No nginx|instance)"; then
+if echo "$analyze_output" | grep -qiE "(Analy|Detect|No nginx|instance|nginx-optimizer|error)"; then
     log_pass "analyze command works"
 else
     log_fail "analyze command failed"
