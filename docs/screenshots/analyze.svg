@@ -1,41 +1,29 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="700" height="922">
+<svg xmlns="http://www.w3.org/2000/svg" width="700" height="542">
   <defs>
     <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
       <feDropShadow dx="0" dy="4" stdDeviation="6" flood-opacity="0.3"/>
     </filter>
   </defs>
-  <rect width="700" height="922" rx="10" fill="#282C34" filter="url(#shadow)"/>
+  <rect width="700" height="542" rx="10" fill="#282C34" filter="url(#shadow)"/>
   <rect width="700" height="40" rx="10" fill="#21252B"/>
   <rect x="0" y="30" width="700" height="10" fill="#21252B"/>
   <circle cx="20" cy="20" r="6" fill="#E06C75"/>
   <circle cx="40" cy="20" r="6" fill="#E5C07B"/>
   <circle cx="60" cy="20" r="6" fill="#98C379"/>
   <text x="350" y="25" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,sans-serif" font-size="13" fill="#9DA5B4">$ nginx-optimizer analyze</text>
-  <text x="24" y="76" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  <tspan fill="#56B6C2">nginx-optimizer</tspan> v0.10.0-beta</text>
-  <text x="24" y="116" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  Analyzing: All sites</text>
-  <text x="24" y="176" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  Detecting...</text>
-  <text x="24" y="196" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">    <tspan fill="#98C379">✓</tspan> System nginx (v1.29.4)</text>
-  <text x="24" y="216" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve"><tspan fill="#E06C75">[ERROR]</tspan> nginx -T failed with exit code 1</text>
-  <text x="24" y="236" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">    <tspan fill="#98C379">✓</tspan> Docker nginx-proxy (wp-test)</text>
-  <text x="24" y="256" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">    <tspan fill="#98C379">✓</tspan> wp-test sites (24 found)</text>
-  <text x="24" y="296" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  Using cached analysis...</text>
-  <text x="24" y="316" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">    <tspan fill="#98C379">✓</tspan> Config unchanged (2h ago)</text>
-  <text x="24" y="356" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  ─────────────────────────────────────────────────────</text>
-  <text x="24" y="376" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  6 site(s) analyzed (use --no-cache to refresh)</text>
-  <text x="24" y="416" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  Recommended optimizations:</text>
-  <text x="24" y="456" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">    <tspan fill="#98C379">1</tspan>  HTTP/3 QUIC              <tspan fill="#56B6C2">all 6 sites</tspan></text>
-  <text x="24" y="476" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">    <tspan fill="#98C379">2</tspan>  Security Headers &amp; Rate Limiting <tspan fill="#56B6C2">all 6 sites</tspan></text>
-  <text x="24" y="496" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">    <tspan fill="#98C379">3</tspan>  WordPress Security Exclusions <tspan fill="#56B6C2">all 6 sites</tspan></text>
-  <text x="24" y="536" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">    <tspan fill="#98C379">0</tspan>  Apply ALL</text>
-  <text x="24" y="576" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  ─────────────────────────────────────────────────────</text>
-  <text x="24" y="596" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  <tspan fill="#56B6C2">q</tspan>=quit  <tspan fill="#56B6C2">r</tspan>=refresh</text>
-  <text x="24" y="636" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  Select [1-3, 0=all, q]: </text>
-  <text x="24" y="656" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  Recommended optimizations:</text>
-  <text x="24" y="696" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">    <tspan fill="#98C379">1</tspan>  HTTP/3 QUIC              <tspan fill="#56B6C2">all 6 sites</tspan></text>
-  <text x="24" y="716" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">    <tspan fill="#98C379">2</tspan>  Security Headers &amp; Rate Limiting <tspan fill="#56B6C2">all 6 sites</tspan></text>
-  <text x="24" y="736" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">    <tspan fill="#98C379">3</tspan>  WordPress Security Exclusions <tspan fill="#56B6C2">all 6 sites</tspan></text>
-  <text x="24" y="776" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">    <tspan fill="#98C379">0</tspan>  Apply ALL</text>
-  <text x="24" y="816" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  ─────────────────────────────────────────────────────</text>
-  <text x="24" y="836" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  <tspan fill="#56B6C2">q</tspan>=quit  <tspan fill="#56B6C2">r</tspan>=refresh</text>
-  <text x="24" y="876" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  Select [1-3, 0=all, q]: </text>
+  <text x="24" y="56" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  <tspan fill="#56B6C2">nginx-optimizer</tspan> v0.10.0-beta</text>
+  <text x="24" y="96" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  Analyzing: All sites</text>
+  <text x="24" y="156" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  Detecting...</text>
+  <text x="24" y="176" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">    <tspan fill="#98C379">✓</tspan> System nginx (v1.27.3)</text>
+  <text x="24" y="196" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">    <tspan fill="#98C379">✓</tspan> Docker nginx-proxy (wp-test)</text>
+  <text x="24" y="216" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">    <tspan fill="#98C379">✓</tspan> wp-test sites (6 found)</text>
+  <text x="24" y="256" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  Using cached analysis...</text>
+  <text x="24" y="276" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">    <tspan fill="#98C379">✓</tspan> Config unchanged (2h ago)</text>
+  <text x="24" y="316" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  ─────────────────────────────────────────────────────</text>
+  <text x="24" y="336" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  6 site(s) analyzed (use --no-cache to refresh)</text>
+  <text x="24" y="376" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  Recommended optimizations:</text>
+  <text x="24" y="416" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">    <tspan fill="#98C379">1</tspan>  HTTP/3 QUIC              <tspan fill="#56B6C2">all 6 sites</tspan></text>
+  <text x="24" y="436" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">    <tspan fill="#98C379">2</tspan>  Security Headers &amp; Rate Limiting <tspan fill="#56B6C2">all 6 sites</tspan></text>
+  <text x="24" y="456" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">    <tspan fill="#98C379">3</tspan>  WordPress Security Exclusions <tspan fill="#56B6C2">all 6 sites</tspan></text>
+  <text x="24" y="496" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">    <tspan fill="#98C379">0</tspan>  Apply ALL</text>
 </svg>

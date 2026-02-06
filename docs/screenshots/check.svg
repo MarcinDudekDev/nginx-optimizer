@@ -19,7 +19,7 @@
   <text x="24" y="216" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve"><tspan fill="#98C379">[SUCCESS]</tspan>   jq: found</text>
   <text x="24" y="236" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve"><tspan fill="#98C379">[SUCCESS]</tspan> All dependencies available</text>
   <text x="24" y="276" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  Nginx Configuration</text>
-  <text x="24" y="296" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve"><tspan fill="#E06C75">[ERROR]</tspan> nginx configuration invalid</text>
+  <text x="24" y="296" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve"><tspan fill="#98C379">[SUCCESS]</tspan> nginx configuration valid</text>
   <text x="24" y="336" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  Registered Features</text>
   <text x="24" y="356" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve"><tspan fill="#61AFEF">[INFO]</tspan>   Compression (brotli)</text>
   <text x="24" y="376" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve"><tspan fill="#61AFEF">[INFO]</tspan>   FastCGI Full-Page Cache (fastcgi-cache)</text>
@@ -29,8 +29,8 @@
   <text x="24" y="456" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve"><tspan fill="#61AFEF">[INFO]</tspan>   Security Headers &amp; Rate Limiting (security)</text>
   <text x="24" y="476" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve"><tspan fill="#61AFEF">[INFO]</tspan>   WordPress Security Exclusions (wordpress)</text>
   <text x="24" y="516" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  Backup System</text>
-  <text x="24" y="536" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve"><tspan fill="#98C379">[SUCCESS]</tspan> Backup directory writable (50 existing backups)</text>
-  <text x="24" y="576" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  <tspan fill="#E5C07B">┌─────────────────────────────────────────────────────┐</tspan></text>
-  <text x="24" y="596" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  <tspan fill="#E5C07B">│</tspan>  <tspan fill="#E5C07B">1 issue(s) found. Review above before optimizing.</tspan>  <tspan fill="#E5C07B">│</tspan></text>
-  <text x="24" y="616" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  <tspan fill="#E5C07B">└─────────────────────────────────────────────────────┘</tspan></text>
+  <text x="24" y="536" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve"><tspan fill="#98C379">[SUCCESS]</tspan> Backup directory writable</text>
+  <text x="24" y="576" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  <tspan fill="#98C379">┌─────────────────────────────────────────────────────┐</tspan></text>
+  <text x="24" y="596" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  <tspan fill="#98C379">│</tspan>  <tspan fill="#98C379">All checks passed. Ready to optimize.</tspan>              <tspan fill="#98C379">│</tspan></text>
+  <text x="24" y="616" font-family="'SF Mono','Fira Code',Menlo,Monaco,Consolas,monospace" font-size="13.5" fill="#ABB2BF" xml:space="preserve">  <tspan fill="#98C379">└─────────────────────────────────────────────────────┘</tspan></text>
 </svg>
