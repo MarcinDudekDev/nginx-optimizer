@@ -209,40 +209,40 @@ echo "Restoring from backup: $BACKUP_DIR"
 # Restore system nginx (all paths)
 if [ -d "$BACKUP_DIR/nginx" ] && [ -d /etc/nginx ]; then
     echo "Restoring system nginx (/etc/nginx)..."
-    sudo rsync -a "$BACKUP_DIR/nginx/" /etc/nginx/
+    sudo rsync -a --delete "$BACKUP_DIR/nginx/" /etc/nginx/
 fi
 
 if [ -d "$BACKUP_DIR/nginx-homebrew-intel" ] && [ -d /usr/local/etc/nginx ]; then
     echo "Restoring homebrew nginx (Intel)..."
-    rsync -a "$BACKUP_DIR/nginx-homebrew-intel/" /usr/local/etc/nginx/
+    rsync -a --delete "$BACKUP_DIR/nginx-homebrew-intel/" /usr/local/etc/nginx/
 fi
 
 if [ -d "$BACKUP_DIR/nginx-homebrew-arm" ] && [ -d /opt/homebrew/etc/nginx ]; then
     echo "Restoring homebrew nginx (Apple Silicon)..."
-    rsync -a "$BACKUP_DIR/nginx-homebrew-arm/" /opt/homebrew/etc/nginx/
+    rsync -a --delete "$BACKUP_DIR/nginx-homebrew-arm/" /opt/homebrew/etc/nginx/
 fi
 
 # Legacy support for old backup format
 if [ -d "$BACKUP_DIR/nginx-homebrew" ]; then
     if [ -d /usr/local/etc/nginx ]; then
         echo "Restoring legacy homebrew nginx..."
-        rsync -a "$BACKUP_DIR/nginx-homebrew/" /usr/local/etc/nginx/
+        rsync -a --delete "$BACKUP_DIR/nginx-homebrew/" /usr/local/etc/nginx/
     elif [ -d /opt/homebrew/etc/nginx ]; then
         echo "Restoring legacy homebrew nginx to Apple Silicon..."
-        rsync -a "$BACKUP_DIR/nginx-homebrew/" /opt/homebrew/etc/nginx/
+        rsync -a --delete "$BACKUP_DIR/nginx-homebrew/" /opt/homebrew/etc/nginx/
     fi
 fi
 
 # Restore wp-test nginx
 if [ -d "$BACKUP_DIR/wp-test-nginx" ]; then
     echo "Restoring wp-test nginx..."
-    rsync -a "$BACKUP_DIR/wp-test-nginx/" "$HOME/.wp-test/nginx/"
+    rsync -a --delete "$BACKUP_DIR/wp-test-nginx/" "$HOME/.wp-test/nginx/"
 fi
 
 # Restore wp-test sites
 if [ -d "$BACKUP_DIR/wp-test-sites" ]; then
     echo "Restoring wp-test sites..."
-    rsync -a "$BACKUP_DIR/wp-test-sites/" "$HOME/.wp-test/sites/"
+    rsync -a --delete "$BACKUP_DIR/wp-test-sites/" "$HOME/.wp-test/sites/"
 fi
 
 # Restore docker-compose files
@@ -265,7 +265,7 @@ fi
 # Restore PHP configs
 if [ -d "$BACKUP_DIR/php" ] && [ -d /etc/php ]; then
     echo "Restoring PHP configs..."
-    rsync -a "$BACKUP_DIR/php/" /etc/php/
+    rsync -a --delete "$BACKUP_DIR/php/" /etc/php/
 fi
 
 # Test and reload nginx
@@ -356,17 +356,17 @@ manual_restore() {
     # Restore system nginx (all paths)
     if [ -d "$backup_path/nginx" ] && [ -d /etc/nginx ]; then
         log_info "Restoring system nginx (/etc/nginx)..."
-        sudo rsync -a "$backup_path/nginx/" /etc/nginx/
+        sudo rsync -a --delete "$backup_path/nginx/" /etc/nginx/
     fi
 
     if [ -d "$backup_path/nginx-homebrew-intel" ] && [ -d /usr/local/etc/nginx ]; then
         log_info "Restoring homebrew nginx (Intel)..."
-        rsync -a "$backup_path/nginx-homebrew-intel/" /usr/local/etc/nginx/
+        rsync -a --delete "$backup_path/nginx-homebrew-intel/" /usr/local/etc/nginx/
     fi
 
     if [ -d "$backup_path/nginx-homebrew-arm" ] && [ -d /opt/homebrew/etc/nginx ]; then
         log_info "Restoring homebrew nginx (Apple Silicon)..."
-        rsync -a "$backup_path/nginx-homebrew-arm/" /opt/homebrew/etc/nginx/
+        rsync -a --delete "$backup_path/nginx-homebrew-arm/" /opt/homebrew/etc/nginx/
     fi
 
     # Legacy: Handle old backup format (nginx-homebrew)
@@ -383,19 +383,19 @@ manual_restore() {
     # Restore wp-test nginx
     if [ -d "$backup_path/wp-test-nginx" ]; then
         log_info "Restoring wp-test nginx..."
-        rsync -a "$backup_path/wp-test-nginx/" "$WP_TEST_NGINX/"
+        rsync -a --delete "$backup_path/wp-test-nginx/" "$WP_TEST_NGINX/"
     fi
 
     # Restore wp-test sites
     if [ -d "$backup_path/wp-test-sites" ]; then
         log_info "Restoring wp-test sites..."
-        rsync -a "$backup_path/wp-test-sites/" "$WP_TEST_SITES/"
+        rsync -a --delete "$backup_path/wp-test-sites/" "$WP_TEST_SITES/"
     fi
 
     # Restore PHP configs
     if [ -d "$backup_path/php" ] && [ -d /etc/php ]; then
         log_info "Restoring PHP configs..."
-        rsync -a "$backup_path/php/" /etc/php/
+        rsync -a --delete "$backup_path/php/" /etc/php/
     fi
 
     # Test configuration

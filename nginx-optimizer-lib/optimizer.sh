@@ -680,8 +680,8 @@ inject_server_includes() {
         temp_file=$(transaction_add_file "$site_conf")
         temp_files+=("$temp_file")
 
-        # Inject after "listen 443 ssl" to target SSL server blocks
-        # This ensures includes go into HTTPS blocks, not HTTP redirect blocks
+        # Inject include directive into server block
+        # Strategy: prefer after "listen 443 ssl", fallback to after "server_name"
         awk -v include_line="    include ${include_file};" '
         BEGIN { injected = 0 }
         {
@@ -691,8 +691,14 @@ inject_server_includes() {
             # Skip commented lines
             if (line ~ /^[[:space:]]*#/) next
 
-            # Inject after first "listen 443 ssl" (targets SSL blocks)
+            # Prefer: inject after "listen 443 ssl" (targets SSL blocks)
             if (!injected && line ~ /listen[[:space:]]+443[[:space:]]+ssl/) {
+                print include_line
+                injected = 1
+            }
+
+            # Fallback: inject after "server_name" (for non-SSL configs behind proxies)
+            if (!injected && line ~ /^[[:space:]]*server_name[[:space:]]/) {
                 print include_line
                 injected = 1
             }

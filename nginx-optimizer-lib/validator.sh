@@ -94,7 +94,7 @@ test_nginx_config() {
     fi
 
     # Test wp-test proxy
-    if docker ps --format "{{.Names}}" | grep -q "wp-test-proxy"; then
+    if command -v docker &>/dev/null && docker ps --format "{{.Names}}" 2>/dev/null | grep -q "wp-test-proxy"; then
         log_info "Testing wp-test nginx-proxy..."
 
         if run_with_timeout $NGINX_TIMEOUT docker exec wp-test-proxy nginx -t 2>&1 | tee -a "$LOG_FILE"; then

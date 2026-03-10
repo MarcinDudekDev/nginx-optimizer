@@ -120,6 +120,34 @@ feature_apply_custom_brotli() {
         log_to_file "INFO" "Applying Brotli/Gzip compression..."
     fi
 
+    # Comment out existing gzip directives in nginx.conf to avoid duplicates
+    local nginx_conf
+    if type -t get_nginx_main_conf &>/dev/null; then
+        nginx_conf=$(get_nginx_main_conf)
+    else
+        nginx_conf="/etc/nginx/nginx.conf"
+    fi
+    if [[ -f "$nginx_conf" ]] && grep -qE "^[[:space:]]*gzip" "$nginx_conf" 2>/dev/null; then
+        if [ "${DRY_RUN:-false}" != true ]; then
+            if type -t log_to_file &>/dev/null; then
+                log_to_file "INFO" "Commenting out existing gzip directives in $nginx_conf"
+            fi
+            if type -t sed_i &>/dev/null; then
+                if [ -w "$nginx_conf" ]; then
+                    sed_i 's/^[[:space:]]*gzip\b/# &/' "$nginx_conf"
+                else
+                    sed_i --sudo 's/^[[:space:]]*gzip\b/# &/' "$nginx_conf"
+                fi
+            else
+                if [ -w "$nginx_conf" ]; then
+                    sed -i 's/^[[:space:]]*gzip\b/# &/' "$nginx_conf"
+                else
+                    sudo sed -i 's/^[[:space:]]*gzip\b/# &/' "$nginx_conf"
+                fi
+            fi
+        fi
+    fi
+
     # Deploy compression.conf to conf.d
     if type -t deploy_template_to_confd &>/dev/null; then
         if deploy_template_to_confd "compression.conf"; then
