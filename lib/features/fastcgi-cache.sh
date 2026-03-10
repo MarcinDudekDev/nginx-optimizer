@@ -24,7 +24,7 @@ FEATURE_DETECT_PATTERN="fastcgi_cache_path"
 # shellcheck disable=SC2034
 FEATURE_SCOPE="per-site"
 # shellcheck disable=SC2034
-FEATURE_TEMPLATE="fastcgi-cache.conf,fastcgi-cache-zone.conf"
+FEATURE_TEMPLATE="fastcgi-cache.conf,fastcgi-cache-location.conf,fastcgi-cache-zone.conf"
 # shellcheck disable=SC2034
 FEATURE_TEMPLATE_CONTEXT="mixed"
 # shellcheck disable=SC2034
@@ -197,7 +197,7 @@ _fastcgi_deploy_system() {
         _fastcgi_deploy_confd || return 1
     fi
 
-    # Deploy server config to snippets (cross-platform)
+    # Deploy server-level and location-level configs to snippets (cross-platform)
     local snippets_dir
     if type -t get_nginx_snippets_dir &>/dev/null; then
         snippets_dir=$(get_nginx_snippets_dir)
@@ -218,43 +218,47 @@ _fastcgi_deploy_system() {
     if [ "${DRY_RUN:-false}" = true ]; then
         if type -t ui_step_path &>/dev/null; then
             ui_step_path "Would create" "snippets/fastcgi-cache.conf"
+            ui_step_path "Would create" "snippets/fastcgi-cache-location.conf"
         fi
     else
         local template_dir="${TEMPLATE_DIR:-nginx-optimizer-templates}"
-        local src="${template_dir}/fastcgi-cache.conf"
-        local dst="${snippets_dir}/fastcgi-cache.conf"
 
-        if [ -f "$src" ]; then
-            # Create directory with sudo if needed
+        # Create snippets directory with sudo if needed
+        if [ ! -d "$snippets_dir" ]; then
             if [ -w "$(dirname "$snippets_dir")" ]; then
                 mkdir -p "$snippets_dir" 2>/dev/null
             else
                 sudo mkdir -p "$snippets_dir" 2>/dev/null
             fi
+        fi
 
-            # Use smart_copy helper if available
-            if type -t smart_copy &>/dev/null; then
-                smart_copy "$src" "$dst"
-            else
-                # Fallback to inline sudo logic
-                if [ -w "$snippets_dir" ]; then
+        # Deploy both templates: server-level skip rules + location-level cache directives
+        local template_name
+        for template_name in fastcgi-cache.conf fastcgi-cache-location.conf; do
+            local src="${template_dir}/${template_name}"
+            local dst="${snippets_dir}/${template_name}"
+
+            if [ -f "$src" ]; then
+                if type -t smart_copy &>/dev/null; then
+                    smart_copy "$src" "$dst"
+                elif [ -w "$snippets_dir" ]; then
                     cp "$src" "$dst" 2>/dev/null
                 else
                     sudo cp "$src" "$dst" 2>/dev/null
                 fi
-            fi
 
-            if [ -f "$dst" ]; then
-                if type -t ui_step_path &>/dev/null; then
-                    ui_step_path "Created config" "snippets/fastcgi-cache.conf"
+                if [ -f "$dst" ]; then
+                    if type -t ui_step_path &>/dev/null; then
+                        ui_step_path "Created config" "snippets/${template_name}"
+                    fi
+                else
+                    if type -t log_to_file &>/dev/null; then
+                        log_to_file "ERROR" "Failed to deploy ${template_name} to snippets"
+                    fi
+                    return 1
                 fi
-            else
-                if type -t log_to_file &>/dev/null; then
-                    log_to_file "ERROR" "Failed to deploy fastcgi-cache.conf to snippets"
-                fi
-                return 1
             fi
-        fi
+        done
     fi
 
     # Inject include directives into server blocks
@@ -325,11 +329,14 @@ _fastcgi_deploy_confd() {
     return 1
 }
 
-# Inject include directives into system nginx server blocks (cross-platform)
+# Inject FastCGI cache into system nginx server blocks (cross-platform)
+# Two-phase injection:
+#   1. Include skip-cache rules at server level (after server_name)
+#   2. Include cache directives inside existing location ~ \.php$ block
 _fastcgi_inject_system() {
     local target_site="$1"
 
-    # Get cross-platform sites directory - use helper if available
+    # Get cross-platform sites directory
     local sites_dir
     if type -t find_nginx_dir &>/dev/null; then
         sites_dir=$(find_nginx_dir "sites-enabled")
@@ -373,7 +380,7 @@ _fastcgi_inject_system() {
         fi
 
         # Skip if already configured
-        if grep -q "fastcgi-cache.conf" "$site_conf" 2>/dev/null; then
+        if grep -q "fastcgi-cache" "$site_conf" 2>/dev/null; then
             continue
         fi
 
@@ -382,7 +389,6 @@ _fastcgi_inject_system() {
             continue
         fi
 
-        # Inject the include directive
         local temp_file
         if type -t secure_mktemp &>/dev/null; then
             temp_file=$(secure_mktemp)
@@ -390,17 +396,37 @@ _fastcgi_inject_system() {
             temp_file=$(mktemp)
         fi
 
-        # Add include after server { line
+        # Two-phase injection with awk:
+        # 1. After server_name (or listen 443 ssl): include server-level skip rules
+        # 2. Inside location ~ \.php$ block, after fastcgi_pass: include cache directives
         awk -v snippets="$snippets_dir" '
-        BEGIN { injected = 0 }
+        BEGIN { server_injected = 0; in_php_location = 0; php_injected = 0 }
         {
-            print $0
+            line = $0
+            print line
+
             # Skip commented lines
-            if ($0 ~ /^[[:space:]]*#/) next
-            # Inject after first server {
-            if (!injected && $0 ~ /server[[:space:]]*\{/) {
-                print "    include " snippets "/fastcgi-cache.conf;"
-                injected = 1
+            if (line ~ /^[[:space:]]*#/) next
+
+            # Phase 1: inject server-level skip rules after server_name or listen 443
+            if (!server_injected) {
+                if (line ~ /listen[[:space:]]+443[[:space:]]+ssl/) {
+                    print "    include " snippets "/fastcgi-cache.conf;"
+                    server_injected = 1
+                } else if (line ~ /^[[:space:]]*server_name[[:space:]]/) {
+                    print "    include " snippets "/fastcgi-cache.conf;"
+                    server_injected = 1
+                }
+            }
+
+            # Phase 2: track PHP location block and inject cache directives
+            if (line ~ /location[[:space:]]+~[[:space:]]+\\.php/) {
+                in_php_location = 1
+            }
+            if (in_php_location && !php_injected && line ~ /fastcgi_pass[[:space:]]/) {
+                print "        include " snippets "/fastcgi-cache-location.conf;"
+                php_injected = 1
+                in_php_location = 0
             }
         }' "$site_conf" > "$temp_file"
 
