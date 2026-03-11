@@ -6,7 +6,7 @@
 
 NGINX_BUILD_DIR="${DATA_DIR}/nginx-build"
 NGINX_BACKUP_DIR="${DATA_DIR}/nginx-backup"
-NGINX_VERSION="1.25.3"
+NGINX_VERSION="1.28.2"
 NGINX_SRC_DIR=""  # Set during download
 
 ################################################################################
@@ -94,8 +94,8 @@ verify_download_checksum() {
 }
 
 download_nginx_source() {
-    # Official nginx 1.25.3 SHA256 checksum
-    local nginx_checksum="64ad18e26aeb0969c0c0a80d2f4c7e3f7b8c6f3b5c6c2e1b6f2e3e8e8e8e8e8e"
+    # Official nginx 1.28.2 SHA256 checksum (from nginx.org/download)
+    local nginx_checksum="20e5e0f2c917acfb51120eec2fba9a4ba4e1e10fd28465067cc87a7d81a829a3"
 
     wget "https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz"
 
