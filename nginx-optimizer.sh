@@ -76,6 +76,7 @@ ALLOWED_FEATURES=(
     "security" "headers"
     "wordpress" "wp"
     "opcache" "php"
+    "upstream-keepalive" "keepalive" "phpfpm"
     "www-ssl" "www"
     "honeypot"
 )
