@@ -77,6 +77,7 @@ ALLOWED_FEATURES=(
     "wordpress" "wp"
     "opcache" "php"
     "upstream-keepalive" "keepalive" "phpfpm"
+    "open-file-cache" "filecache"
     "www-ssl" "www"
     "honeypot"
 )

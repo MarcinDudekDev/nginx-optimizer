@@ -126,6 +126,7 @@ optimizer.sh implements atomic file operations via `transaction_start/add_file/c
 | `wordpress` / `wp` | xmlrpc blocking, wp-config protection |
 | `opcache` / `php` | PHP OpCache tuning |
 | `upstream-keepalive` / `keepalive` / `phpfpm` | Persistent PHP-FPM connections |
+| `open-file-cache` / `filecache` | File descriptor caching for static assets |
 | `honeypot` | Bot tarpit with canary tokens |
 
 ## Testing Changes
