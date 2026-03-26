@@ -1,9 +1,10 @@
 #!/bin/bash
 ################################################################################
-# features/open-file-cache.sh - Open File Cache
+# features/log-tuning.sh - Log Tuning
 ################################################################################
-# Caches file descriptors and metadata to eliminate filesystem syscalls.
-# Significant impact on high-traffic sites with many static assets.
+# Custom log format with upstream timing metrics for performance analysis.
+# Buffered log writes to reduce disk I/O on high-traffic sites.
+# Inspired by easyinstallvps project's logging approach.
 ################################################################################
 
 # Ensure registry is loaded
@@ -17,19 +18,19 @@ fi
 ################################################################################
 
 # shellcheck disable=SC2034  # FEATURE_* vars consumed by feature_register() in registry.sh
-FEATURE_ID="open-file-cache"
+FEATURE_ID="log-tuning"
 # shellcheck disable=SC2034
-FEATURE_DISPLAY="Open File Cache"
+FEATURE_DISPLAY="Log Tuning"
 # shellcheck disable=SC2034
-FEATURE_DETECT_PATTERN="open_file_cache[[:space:]]+max="
+FEATURE_DETECT_PATTERN="log_format[[:space:]]+timed"
 # shellcheck disable=SC2034
 FEATURE_SCOPE="global"
 # shellcheck disable=SC2034
-FEATURE_TEMPLATE="open-file-cache.conf"
+FEATURE_TEMPLATE="log-tuning.conf"
 # shellcheck disable=SC2034
 FEATURE_TEMPLATE_CONTEXT="http"
 # shellcheck disable=SC2034
-FEATURE_ALIASES="filecache"
+FEATURE_ALIASES="logging,logs"
 # shellcheck disable=SC2034
 FEATURE_NGINX_MIN_VERSION=""
 # shellcheck disable=SC2034
@@ -39,11 +40,11 @@ FEATURE_PREREQ_CHECK=""
 # Custom Detection Logic
 ################################################################################
 
-# Detect open_file_cache in nginx configs
+# Detect log tuning configuration
 # Args: $1 = config_file, $2 = site_name (optional)
 # Returns: 0 if detected, 1 if not
-feature_detect_custom_open_file_cache() {
-    # shellcheck disable=SC2034  # config_file part of detection API, not used for global feature
+feature_detect_custom_log_tuning() {
+    # shellcheck disable=SC2034  # config_file part of detection API
     local config_file="$1"
     # shellcheck disable=SC2034  # site_name reserved for API compatibility
     local site_name="${2:-}"
@@ -53,26 +54,26 @@ feature_detect_custom_open_file_cache() {
     if type -t get_nginx_confd_dir &>/dev/null; then
         confd_dir=$(get_nginx_confd_dir)
     fi
-    if [[ -n "${confd_dir:-}" ]] && [[ -f "${confd_dir}/open-file-cache.conf" ]]; then
+    if [[ -n "${confd_dir:-}" ]] && [[ -f "${confd_dir}/log-tuning.conf" ]]; then
         # shellcheck disable=SC2034  # LAST_DIRECTIVE_SOURCE consumed by registry.sh
-        LAST_DIRECTIVE_SOURCE="conf.d/open-file-cache.conf"
+        LAST_DIRECTIVE_SOURCE="conf.d/log-tuning.conf"
         return 0
     fi
 
-    # Check nginx.conf for open_file_cache directive
+    # Check nginx.conf for timed log format
     local nginx_conf
     if type -t get_nginx_main_conf &>/dev/null; then
         nginx_conf=$(get_nginx_main_conf)
-        if [[ -f "$nginx_conf" ]] && grep -qE "open_file_cache[[:space:]]+max=" "$nginx_conf" 2>/dev/null; then
+        if [[ -f "$nginx_conf" ]] && grep -qE 'log_format[[:space:]]+timed' "$nginx_conf" 2>/dev/null; then
             # shellcheck disable=SC2034  # LAST_DIRECTIVE_SOURCE consumed by registry.sh
             LAST_DIRECTIVE_SOURCE="$nginx_conf"
             return 0
         fi
     fi
 
-    # Check conf.d for any file with open_file_cache
+    # Check conf.d for any file with timed log format
     if [[ -n "${confd_dir:-}" ]] && [[ -d "$confd_dir" ]]; then
-        if grep -rqE "open_file_cache[[:space:]]+max=" "$confd_dir" 2>/dev/null; then
+        if grep -rqE 'log_format[[:space:]]+timed' "$confd_dir" 2>/dev/null; then
             # shellcheck disable=SC2034  # LAST_DIRECTIVE_SOURCE consumed by registry.sh
             LAST_DIRECTIVE_SOURCE="conf.d/"
             return 0
@@ -86,22 +87,22 @@ feature_detect_custom_open_file_cache() {
 # Custom Apply Logic
 ################################################################################
 
-# Apply open_file_cache to conf.d
+# Apply log tuning to conf.d
 # Args: $1 = target_site (optional, ignored for global feature)
 # Returns: 0 on success, 1 on failure
-feature_apply_custom_open_file_cache() {
+feature_apply_custom_log_tuning() {
     # shellcheck disable=SC2034  # target_site reserved for global features
     local target_site="${1:-}"
 
     if type -t log_to_file &>/dev/null; then
-        log_to_file "INFO" "Applying Open File Cache..."
+        log_to_file "INFO" "Applying Log Tuning..."
     fi
 
-    # Skip if already configured in nginx.conf or conf.d (avoid duplicate directive)
+    # Skip if already configured
     local nginx_conf
     if type -t get_nginx_main_conf &>/dev/null; then
         nginx_conf=$(get_nginx_main_conf)
-        if [[ -f "$nginx_conf" ]] && grep -qE "^[[:space:]]*open_file_cache[[:space:]]+max=" "$nginx_conf" 2>/dev/null; then
+        if [[ -f "$nginx_conf" ]] && grep -qE 'log_format[[:space:]]+timed' "$nginx_conf" 2>/dev/null; then
             if type -t ui_step_path &>/dev/null; then
                 ui_step_path "Already configured in" "$nginx_conf"
             fi
@@ -112,7 +113,7 @@ feature_apply_custom_open_file_cache() {
     if type -t get_nginx_confd_dir &>/dev/null; then
         confd_dir=$(get_nginx_confd_dir)
     fi
-    if [[ -n "${confd_dir:-}" ]] && grep -rqE "open_file_cache[[:space:]]+max=" "$confd_dir" 2>/dev/null; then
+    if [[ -n "${confd_dir:-}" ]] && grep -rqE 'log_format[[:space:]]+timed' "$confd_dir" 2>/dev/null; then
         if type -t ui_step_path &>/dev/null; then
             ui_step_path "Already configured in" "conf.d/"
         fi
@@ -121,16 +122,15 @@ feature_apply_custom_open_file_cache() {
 
     # Deploy to conf.d
     if type -t deploy_template_to_confd &>/dev/null; then
-        if deploy_template_to_confd "open-file-cache.conf"; then
+        if deploy_template_to_confd "log-tuning.conf"; then
+            if type -t log_info &>/dev/null; then
+                log_info "To use: access_log /var/log/nginx/access.log timed buffer=32k flush=5s;"
+            fi
             return 0
         fi
     fi
 
     # Fallback: manual deployment
-    local confd_dir
-    if type -t get_nginx_confd_dir &>/dev/null; then
-        confd_dir=$(get_nginx_confd_dir)
-    fi
     if [[ -z "${confd_dir:-}" ]]; then
         for dir in /etc/nginx/conf.d /opt/homebrew/etc/nginx/conf.d /usr/local/etc/nginx/conf.d; do
             if [[ -d "$dir" ]]; then
@@ -148,51 +148,35 @@ feature_apply_custom_open_file_cache() {
     fi
 
     local template_dir="${TEMPLATE_DIR:-nginx-optimizer-templates}"
-    local src="${template_dir}/open-file-cache.conf"
-    local dst="${confd_dir}/open-file-cache.conf"
+    local src="${template_dir}/log-tuning.conf"
+    local dst="${confd_dir}/log-tuning.conf"
 
     if [[ ! -f "$src" ]]; then
         if type -t log_warn &>/dev/null; then
-            log_warn "Open file cache template not found: $src"
+            log_warn "Log tuning template not found: $src"
         fi
         return 1
     fi
 
-    # Get RAM-aware value if sysinfo is available
-    local ofc_max=10000
-    if type -t sysinfo_open_file_cache_max &>/dev/null; then
-        ofc_max=$(sysinfo_open_file_cache_max)
-    fi
-
     if [ "${DRY_RUN:-false}" = true ]; then
         if type -t ui_step_path &>/dev/null; then
-            ui_step_path "Would deploy" "conf.d/open-file-cache.conf (max=${ofc_max})"
+            ui_step_path "Would deploy" "conf.d/log-tuning.conf"
         fi
         return 0
     fi
 
-    # Generate tuned config instead of copying static template
-    local tuned_content
-    tuned_content="# Open File Cache Configuration (RAM-tuned)
-# Generated by nginx-optimizer with detected system resources
-#
-# Caches file descriptors and metadata in memory, eliminating
-# thousands of open() syscalls per second on static assets.
-
-open_file_cache max=${ofc_max} inactive=60s;
-open_file_cache_valid 30s;
-open_file_cache_min_uses 2;
-open_file_cache_errors on;
-"
     if [[ -w "$confd_dir" ]]; then
-        printf '%s' "$tuned_content" > "$dst"
+        cp "$src" "$dst"
     else
-        printf '%s' "$tuned_content" | sudo tee "$dst" > /dev/null
+        sudo cp "$src" "$dst"
     fi
 
     if [[ -f "$dst" ]]; then
         if type -t ui_step_path &>/dev/null; then
-            ui_step_path "Deployed" "conf.d/open-file-cache.conf"
+            ui_step_path "Deployed" "conf.d/log-tuning.conf"
+        fi
+        if type -t log_info &>/dev/null; then
+            log_info "To use: access_log /var/log/nginx/access.log timed buffer=32k flush=5s;"
         fi
         return 0
     fi

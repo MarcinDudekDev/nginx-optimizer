@@ -73,6 +73,77 @@ feature_apply_custom_security() {
 # Helper Functions
 ################################################################################
 
+# Deploy DDoS protection snippet with RAM-aware connection limits
+_security_deploy_ddos_protection() {
+    local template_dir="${TEMPLATE_DIR:-nginx-optimizer-templates}"
+    local src="${template_dir}/ddos-protection.conf"
+
+    if [[ ! -f "$src" ]]; then
+        return 0  # Optional template, not a failure
+    fi
+
+    # Get RAM-aware limits
+    local conn_per_ip=50
+    local conn_per_server=10000
+    if type -t sysinfo_conn_limit_per_ip &>/dev/null; then
+        conn_per_ip=$(sysinfo_conn_limit_per_ip)
+        conn_per_server=$(sysinfo_conn_limit_per_server)
+    fi
+
+    # Deploy to snippets with tuned values
+    local snippets_dir
+    if type -t get_nginx_snippets_dir &>/dev/null; then
+        snippets_dir=$(get_nginx_snippets_dir)
+    fi
+    if [[ -z "${snippets_dir:-}" ]]; then
+        local confd_dir
+        if type -t get_nginx_confd_dir &>/dev/null; then
+            confd_dir=$(get_nginx_confd_dir)
+        fi
+        if [[ -n "${confd_dir:-}" ]]; then
+            snippets_dir="$(dirname "$confd_dir")/snippets"
+        fi
+    fi
+
+    if [[ -z "${snippets_dir:-}" ]]; then
+        return 0  # Can't find snippets dir, not a failure
+    fi
+
+    if [ "${DRY_RUN:-false}" = true ]; then
+        if type -t ui_step_path &>/dev/null; then
+            ui_step_path "Would deploy" "snippets/ddos-protection.conf (per_ip=${conn_per_ip}, per_server=${conn_per_server})"
+        fi
+        return 0
+    fi
+
+    local temp_file
+    temp_file=$(mktemp)
+    sed -e "s|limit_conn addr 50|limit_conn addr ${conn_per_ip}|g" \
+        -e "s|limit_conn perserver 10000|limit_conn perserver ${conn_per_server}|g" "$src" > "$temp_file"
+
+    if [[ ! -d "$snippets_dir" ]]; then
+        if [[ -w "$(dirname "$snippets_dir")" ]]; then
+            mkdir -p "$snippets_dir" 2>/dev/null
+        else
+            sudo mkdir -p "$snippets_dir" 2>/dev/null
+        fi
+    fi
+
+    local dst="${snippets_dir}/ddos-protection.conf"
+    if [[ -w "$snippets_dir" ]]; then
+        cp "$temp_file" "$dst"
+    else
+        sudo cp "$temp_file" "$dst"
+    fi
+    rm -f "$temp_file"
+
+    if [[ -f "$dst" ]]; then
+        if type -t ui_step_path &>/dev/null; then
+            ui_step_path "Deployed DDoS protection" "per_ip=${conn_per_ip}, per_server=${conn_per_server}"
+        fi
+    fi
+}
+
 # Apply security to system nginx
 _security_apply_system() {
     local target_site="$1"
@@ -82,6 +153,9 @@ _security_apply_system() {
         if type -t deploy_template_to_confd &>/dev/null; then
             deploy_template_to_confd "security-http.conf"
         fi
+
+        # Deploy DDoS protection snippet with RAM-aware connection limits
+        _security_deploy_ddos_protection
     else
         if type -t ui_step &>/dev/null; then
             ui_step "Skipping rate limiting zones (--no-rate-limit)"

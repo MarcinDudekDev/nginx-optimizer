@@ -221,8 +221,14 @@ _keepalive_deploy_upstream() {
             temp_file=$(mktemp)
         fi
 
-        # Replace the default socket path with detected one
-        sed "s|unix:/var/run/php-fpm.sock|${fpm_socket}|g" "$src" > "$temp_file"
+        # Get RAM-aware keepalive value
+        local keepalive_conns=16
+        if type -t sysinfo_keepalive_connections &>/dev/null; then
+            keepalive_conns=$(sysinfo_keepalive_connections)
+        fi
+
+        # Replace the default socket path and keepalive value with tuned ones
+        sed -e "s|unix:/var/run/php-fpm.sock|${fpm_socket}|g" -e "s|keepalive 16|keepalive ${keepalive_conns}|g" "$src" > "$temp_file"
 
         if type -t smart_copy &>/dev/null; then
             smart_copy "$temp_file" "$dst"

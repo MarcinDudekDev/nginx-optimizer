@@ -78,6 +78,11 @@ ALLOWED_FEATURES=(
     "opcache" "php"
     "upstream-keepalive" "keepalive" "phpfpm"
     "open-file-cache" "filecache"
+    "bad-bot-blocker" "botblocker" "bots"
+    "cloudflare-realip" "cloudflare" "cf-realip" "realip"
+    "log-tuning" "logging" "logs"
+    "server-tuning" "workers" "tuning"
+    "php-fpm-tuning" "fpm" "php-fpm" "php-workers"
     "www-ssl" "www"
     "honeypot"
 )

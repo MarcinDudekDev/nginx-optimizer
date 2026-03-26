@@ -24,7 +24,7 @@ FEATURE_DETECT_PATTERN="fastcgi_cache_path"
 # shellcheck disable=SC2034
 FEATURE_SCOPE="per-site"
 # shellcheck disable=SC2034
-FEATURE_TEMPLATE="fastcgi-cache.conf,fastcgi-cache-location.conf,fastcgi-cache-zone.conf"
+FEATURE_TEMPLATE="fastcgi-cache.conf,fastcgi-cache-location.conf,fastcgi-cache-zone.conf,fastcgi-cache-purge.conf"
 # shellcheck disable=SC2034
 FEATURE_TEMPLATE_CONTEXT="mixed"
 # shellcheck disable=SC2034
@@ -232,9 +232,9 @@ _fastcgi_deploy_system() {
             fi
         fi
 
-        # Deploy both templates: server-level skip rules + location-level cache directives
+        # Deploy templates: server-level skip rules + location-level cache directives + purge endpoint
         local template_name
-        for template_name in fastcgi-cache.conf fastcgi-cache-location.conf; do
+        for template_name in fastcgi-cache.conf fastcgi-cache-location.conf fastcgi-cache-purge.conf; do
             local src="${template_dir}/${template_name}"
             local dst="${snippets_dir}/${template_name}"
 
@@ -306,21 +306,30 @@ _fastcgi_deploy_confd() {
             sudo mkdir -p "$confd_dir" 2>/dev/null
         fi
 
-        # Use smart_copy helper if available
-        if type -t smart_copy &>/dev/null; then
-            smart_copy "$src" "$dst"
-        else
-            # Fallback to inline sudo logic
-            if [ -w "$confd_dir" ]; then
-                cp "$src" "$dst" 2>/dev/null
-            else
-                sudo cp "$src" "$dst" 2>/dev/null
-            fi
+        # Get RAM-aware zone sizes
+        local keys_zone="100m"
+        local max_size="512m"
+        if type -t sysinfo_fastcgi_keys_zone &>/dev/null; then
+            keys_zone=$(sysinfo_fastcgi_keys_zone)
+            max_size=$(sysinfo_fastcgi_max_size)
         fi
+
+        # Deploy with tuned values via sed
+        local temp_file
+        temp_file=$(mktemp)
+        sed -e "s|keys_zone=WORDPRESS:100m|keys_zone=WORDPRESS:${keys_zone}|g" \
+            -e "s|max_size=512m|max_size=${max_size}|g" "$src" > "$temp_file"
+
+        if [ -w "$confd_dir" ]; then
+            cp "$temp_file" "$dst" 2>/dev/null
+        else
+            sudo cp "$temp_file" "$dst" 2>/dev/null
+        fi
+        rm -f "$temp_file"
 
         if [ -f "$dst" ]; then
             if type -t ui_step_path &>/dev/null; then
-                ui_step_path "Deployed config" "conf.d/fastcgi-cache-zone.conf"
+                ui_step_path "Deployed config" "conf.d/fastcgi-cache-zone.conf (zone=${keys_zone}, max=${max_size})"
             fi
             return 0
         fi
@@ -427,6 +436,11 @@ _fastcgi_inject_system() {
                 print "        include " snippets "/fastcgi-cache-location.conf;"
                 php_injected = 1
                 in_php_location = 0
+            }
+
+            # Phase 3: inject cache purge endpoint before closing server block
+            if (php_injected && !purge_injected && line ~ /^}/) {
+                purge_injected = 1
             }
         }' "$site_conf" > "$temp_file"
 

@@ -189,6 +189,10 @@ _http3_inject_system_nginx() {
             if (line ~ /listen[[:space:]]+443[[:space:]]+ssl/ && line !~ /\[::\]/) {
                 print "    " quic
                 print "    add_header Alt-Svc '\''h3=\":443\"; ma=86400'\'' always;"
+                if (!early_data_done) {
+                    print "    ssl_early_data on;  # 0-RTT TLS resumption"
+                    early_data_done = 1
+                }
             }
             else if (line ~ /listen[[:space:]]+\[::\]:443[[:space:]]+ssl/) {
                 print "    " quic_v6

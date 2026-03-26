@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/license-MIT-green)]()
 [![Bash](https://img.shields.io/badge/bash-3.2%2B-orange)]()
 
-**One command to optimize your entire nginx stack.** HTTP/3, Brotli, FastCGI cache, Redis, security headers, and WordPress-specific optimizations -- with automatic backup and rollback.
+**One command to optimize your entire server stack.** HTTP/3, Brotli, FastCGI cache, Redis, security headers, DDoS protection, bad bot blocking, and WordPress-specific optimizations — with RAM-aware tuning, automatic backup, and rollback.
 
 **Version:** 0.10.0-beta | **Status:** Beta (production-ready for WordPress sites)
 
@@ -165,20 +165,69 @@ nginx-optimizer optimize --exclude brotli
 
 ## Available Features
 
-- `http3` - HTTP/3 (QUIC) support
-- `fastcgi-cache` - Full-page FastCGI caching
-- `redis` - Redis object caching
-- `brotli` - Brotli + Zopfli compression
-- `security` - Security headers + rate limiting
-- `wordpress` - WordPress-specific exclusions
-- `opcache` - PHP OpCache optimization
+### Performance
+| Feature | Aliases | Description |
+|---------|---------|-------------|
+| `http3` | `quic` | HTTP/3 QUIC with `ssl_early_data` (0-RTT) |
+| `fastcgi-cache` | `cache` | Full-page caching with cache lock, purge support, and `stale-while-revalidate` |
+| `open-file-cache` | `filecache` | File descriptor caching (RAM-tuned `max` entries) |
+| `upstream-keepalive` | `keepalive`, `phpfpm` | Persistent PHP-FPM connections (RAM-tuned pool size) |
+| `brotli` | `compression` | Brotli + Gzip compression for 30+ MIME types |
+| `log-tuning` | `logs` | Custom log format with upstream timing + buffered writes |
+
+### RAM-Aware Stack Tuning
+| Feature | Aliases | Description |
+|---------|---------|-------------|
+| `server-tuning` | `workers`, `tuning` | `worker_processes auto`, `worker_connections`, `worker_rlimit_nofile` |
+| `php-fpm-tuning` | `fpm`, `php-workers` | `pm.max_children` based on RAM budget (50% for PHP @ 40MB/worker) |
+| `opcache` | `php` | PHP OpCache + JIT tuning |
+
+### Security & Protection
+| Feature | Aliases | Description |
+|---------|---------|-------------|
+| `security` | `headers` | HSTS, CSP, rate limiting with 429 responses, DDoS connection limits |
+| `wordpress` | `wp` | xmlrpc blocking, wp-config protection, upload PHP execution denied |
+| `bad-bot-blocker` | `bots` | Block scanners (nikto, sqlmap, wpscan), scrapers (AhrefsBot, SemrushBot) |
+| `cloudflare-realip` | `cloudflare` | Restore real visitor IP behind Cloudflare (all IPv4/IPv6 ranges) |
+| `honeypot` | | Bot tarpit with canary tokens and fail2ban integration |
+
+### Caching & Infrastructure
+| Feature | Aliases | Description |
+|---------|---------|-------------|
+| `redis` | | Redis object cache container for WordPress |
+
+## RAM-Aware Tuning
+
+The optimizer detects your system's RAM and CPU, then tunes every component to fit — no manual sizing needed. On a $5 VPS, you get conservative values that prevent OOM. On a dedicated server, you get aggressive values that maximize throughput.
+
+```
+$ nginx-optimizer check
+System: 1024MB RAM, 1 CPU cores → Tier 2 (Small)
+  worker_connections: 1024
+  fastcgi_cache zone: 20m (~2% of RAM), disk max: 128m
+  open_file_cache max: 5000
+  php-fpm max_children: 12 (~512MB for PHP @ 40MB/worker)
+  conn limit per IP: 30, per server: 1000
+  RAM budget: ~50% PHP-FPM, ~20% MySQL, ~15% OS, ~15% nginx/Redis/buffers
+```
+
+| Tier | RAM | PHP Workers | Cache Zone | Conn/IP | Conn/Server |
+|------|-----|-------------|-----------|---------|-------------|
+| 1 | ≤512MB | 6 | 10m | 20 | 500 |
+| 2 | ≤1GB | 12 | 20m | 30 | 1,000 |
+| 3 | ≤2GB | 25 | 50m | 50 | 3,000 |
+| 4 | ≤4GB | 51 | 100m | 75 | 5,000 |
+| 5 | ≤8GB | 102 | 128m | 100 | 10,000 |
+| 6 | >8GB | 200 | 256m | 150 | 20,000 |
+
+Under DDoS or heavy load, rate-limited requests return **429 Too Many Requests** (not 503), so monitoring tools see "load shedding" instead of "server down."
 
 ## Directory Structure
 
 ```
 nginx-optimizer/
 ├── nginx-optimizer.sh           # Main executable
-├── nginx-optimizer-lib/         # Library modules
+├── nginx-optimizer-lib/         # Legacy library modules
 │   ├── detector.sh             # Detection & analysis
 │   ├── backup.sh               # Backup management
 │   ├── optimizer.sh            # Core optimization logic
@@ -187,15 +236,27 @@ nginx-optimizer/
 │   ├── docker.sh               # Docker image builder
 │   ├── monitoring.sh           # Monitoring setup
 │   └── benchmark.sh            # Performance testing
-└── nginx-optimizer-templates/   # Config templates
-    ├── http3-quic.conf
-    ├── fastcgi-cache.conf
-    ├── redis-cache.conf
-    ├── compression.conf
-    ├── security-headers.conf
-    ├── wordpress-exclusions.conf
-    ├── opcache.ini
-    └── bot-blocker-update.sh
+├── lib/                         # Plugin architecture
+│   ├── registry.sh             # Feature registration API
+│   ├── core/
+│   │   ├── sysinfo.sh         # RAM/CPU detection & tuning values
+│   │   └── templates.sh       # Template deployment helpers
+│   └── features/               # Self-contained feature modules (14)
+│       ├── http3.sh           # HTTP/3 QUIC + early data
+│       ├── fastcgi-cache.sh   # Full-page cache + purge
+│       ├── brotli.sh          # Compression
+│       ├── security.sh        # Headers + DDoS protection
+│       ├── wordpress.sh       # WP hardening
+│       ├── redis.sh           # Object cache
+│       ├── opcache.sh         # PHP OpCache
+│       ├── upstream-keepalive.sh
+│       ├── open-file-cache.sh
+│       ├── server-tuning.sh   # RAM-aware worker tuning
+│       ├── php-fpm-tuning.sh  # RAM-aware FPM tuning
+│       ├── bad-bot-blocker.sh
+│       ├── cloudflare-realip.sh
+│       └── log-tuning.sh
+└── nginx-optimizer-templates/   # Config templates (20+)
 
 tests/
 ├── run-tests.sh                # Unit test suite (70 tests)
@@ -229,15 +290,18 @@ graph TB
         UI["ui.sh<br/>Clean Output"]
     end
 
-    subgraph Plugins ["lib/ — Plugin Architecture"]
+    subgraph Core ["lib/core/"]
+        SYS["sysinfo.sh<br/>RAM/CPU Detection"]
+        TPL["templates.sh<br/>Deployment"]
+    end
+
+    subgraph Plugins ["lib/features/ — 14 Feature Modules"]
         REG["registry.sh<br/>Feature Registry API"]
-        HTTP3["http3.sh"]
-        CACHE["fastcgi-cache.sh"]
-        BROTLI["brotli.sh"]
-        SEC["security.sh"]
-        WP["wordpress.sh"]
-        REDIS["redis.sh"]
-        OPC["opcache.sh"]
+        HTTP3["http3 · cache · brotli"]
+        SEC["security · wordpress · bots"]
+        TUNE["server-tuning · php-fpm"]
+        INFRA["redis · opcache · keepalive"]
+        EXTRA["cloudflare · logs · filecache"]
     end
 
     subgraph Targets ["Detected Environments"]
@@ -250,7 +314,8 @@ graph TB
     CLI --> OPT
     CLI --> BAK
     OPT --> REG
-    REG --> HTTP3 & CACHE & BROTLI & SEC & WP & REDIS & OPC
+    REG --> HTTP3 & SEC & TUNE & INFRA & EXTRA
+    TUNE --> SYS
     DET --> SYS & DOCK & WPTEST
     OPT --> VAL
     BAK --> VAL
@@ -614,9 +679,13 @@ See [SECURITY.md](SECURITY.md) for:
 **Built-in protections:**
 - All sensitive files (wp-config.php, .env) are protected
 - xmlrpc.php is blocked by default
-- Rate limiting prevents brute force attacks (with burst handling)
+- Rate limiting prevents brute force attacks (returns 429, not 503)
+- Per-IP and per-server connection limits prevent socket exhaustion
+- Bad bot blocker drops scanners/scrapers with 444 (no response)
 - Security headers provide XSS/clickjacking protection
 - HSTS enforces HTTPS connections
+- Cloudflare real IP restoration for accurate rate limiting behind proxy
+- RAM-aware tuning prevents OOM by budgeting PHP-FPM workers to fit available memory
 - Automatic health checks after optimization
 
 ## Support

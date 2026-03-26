@@ -6,13 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **ALWAYS run shellcheck and fix issues before pushing:**
 ```bash
-shellcheck --severity=warning nginx-optimizer.sh nginx-optimizer-lib/*.sh
+shellcheck --severity=warning nginx-optimizer.sh nginx-optimizer-lib/*.sh lib/registry.sh lib/core/*.sh lib/features/*.sh
 ```
 A pre-push hook enforces this, but run manually to catch issues early.
 
 ## Project Overview
 
-nginx-optimizer is a bash-based CLI tool for optimizing nginx configurations. It supports HTTP/3, FastCGI caching, Redis, Brotli compression, security headers, and WordPress-specific optimizations. Works with system nginx, Docker containers, and wp-test environments.
+nginx-optimizer is a bash-based CLI tool for optimizing nginx and PHP-FPM configurations. It supports HTTP/3, FastCGI caching, Redis, Brotli compression, security headers, DDoS protection, bad bot blocking, RAM-aware stack tuning, and WordPress-specific optimizations. Works with system nginx, Docker containers, and wp-test environments.
 
 ## Common Commands
 
@@ -127,6 +127,11 @@ optimizer.sh implements atomic file operations via `transaction_start/add_file/c
 | `opcache` / `php` | PHP OpCache tuning |
 | `upstream-keepalive` / `keepalive` / `phpfpm` | Persistent PHP-FPM connections |
 | `open-file-cache` / `filecache` | File descriptor caching for static assets |
+| `bad-bot-blocker` / `botblocker` / `bots` | Block scanners, scrapers, and bad bots (444) |
+| `cloudflare-realip` / `cloudflare` / `realip` | Restore real visitor IP behind Cloudflare |
+| `log-tuning` / `logging` / `logs` | Custom log format with upstream timing + buffered writes |
+| `server-tuning` / `workers` / `tuning` | RAM-aware worker_processes, worker_connections, rlimit_nofile |
+| `php-fpm-tuning` / `fpm` / `php-workers` | RAM-aware pm.max_children, process manager settings |
 | `honeypot` | Bot tarpit with canary tokens |
 
 ## Testing Changes
