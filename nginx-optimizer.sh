@@ -85,6 +85,7 @@ ALLOWED_FEATURES=(
     "php-fpm-tuning" "fpm" "php-fpm" "php-workers"
     "www-ssl" "www"
     "honeypot"
+    "early-hints" "103" "hints" "early"
 )
 
 # Validate input name (site names, backup timestamps)

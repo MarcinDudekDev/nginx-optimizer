@@ -171,6 +171,7 @@ nginx-optimizer optimize --exclude brotli
 | `http3` | `quic` | HTTP/3 QUIC with `ssl_early_data` (0-RTT) |
 | `fastcgi-cache` | `cache` | Full-page caching with cache lock, purge support, and `stale-while-revalidate` |
 | `open-file-cache` | `filecache` | File descriptor caching (RAM-tuned `max` entries) |
+| `early-hints` | `103`, `hints` | HTTP 103 Early Hints forwarding for LCP win (nginx >= 1.29) |
 | `upstream-keepalive` | `keepalive`, `phpfpm` | Persistent PHP-FPM connections (RAM-tuned pool size) |
 | `brotli` | `compression` | Brotli + Gzip compression for 30+ MIME types |
 | `log-tuning` | `logs` | Custom log format with upstream timing + buffered writes |

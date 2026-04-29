@@ -68,6 +68,7 @@ input validation, auto-rollback safety, and pre-flight checks.
 - [ ] Partial rollback (undo single feature)
 - [ ] Config diff visualization
 - [ ] Missing core optimizations (worker_processes, open_file_cache, sendfile, etc.)
+- [x] Early Hints (HTTP 103) forwarding — `early_hints on;` for LCP win on dynamic pages (nginx >= 1.29)
 
 ### Distribution
 - [ ] APT/DEB package
