@@ -614,6 +614,135 @@ purge_cached_templates() {
 }
 
 ################################################################################
+# WordPress Permalink Rewrite Detection
+################################################################################
+#
+# nginx-optimizer is an overlay tool: it injects security/cache includes into an
+# existing WordPress server block but never creates the WP front controller
+# (location / { try_files $uri $uri/ /index.php?$args; }). On modern nginx (no
+# .htaccess), a site missing that block returns 404 for pretty permalinks. These
+# helpers detect the gap, warn, and -- only with explicit consent -- add it.
+
+# Return 0 if the file already routes to the WordPress front controller.
+# Tolerant of whitespace and the $args / $query_string / $is_args$args variants.
+# Ignores commented-out lines.
+wp_has_rewrite() {
+    local file="$1"
+    [ -f "$file" ] || return 1
+    local noncomment
+    noncomment=$(grep -vE '^[[:space:]]*#' "$file" 2>/dev/null || true)
+    printf '%s' "$noncomment" | grep -qE 'try_files[[:space:]]+[^;]*/index\.php'
+}
+
+# Return 0 if the file has an uncommented prefix `location / { ... }` block.
+# Used to avoid injecting a *second* `location /` (which nginx rejects as a
+# duplicate) when one exists but lacks the try_files front controller.
+wp_has_location_root() {
+    local file="$1"
+    [ -f "$file" ] || return 1
+    local noncomment
+    noncomment=$(grep -vE '^[[:space:]]*#' "$file" 2>/dev/null || true)
+    printf '%s' "$noncomment" | grep -qE 'location[[:space:]]+/[[:space:]]*\{'
+}
+
+# Idempotently inject the standard WordPress front controller into the first
+# uncommented server block. Pure text transform -- NO nginx -t here (the caller
+# owns validation for live config). Returns:
+#   0 = injected, 2 = already present (no-op), 1 = failed/no server block
+wp_inject_rewrite() {
+    local file="$1"
+    [ -f "$file" ] || return 1
+
+    # Idempotency: never duplicate the block on re-runs.
+    if wp_has_rewrite "$file"; then
+        return 2
+    fi
+
+    local tmp
+    tmp=$(mktemp)
+    awk '
+    BEGIN { injected = 0 }
+    {
+        print $0
+        if (!injected && $0 !~ /^[[:space:]]*#/ && $0 ~ /server[[:space:]]*\{/) {
+            print "    # nginx-optimizer: WordPress permalink front controller"
+            print "    location / {"
+            print "        try_files $uri $uri/ /index.php?$args;"
+            print "    }"
+            injected = 1
+        }
+    }' "$file" > "$tmp" 2>/dev/null
+
+    # Verify the transform actually added the block before overwriting.
+    if wp_has_rewrite "$tmp"; then
+        cat "$tmp" > "$file"
+        rm -f "$tmp"
+        return 0
+    fi
+
+    rm -f "$tmp"
+    return 1
+}
+
+# Emit a message via the project's logger if available, else fall back to echo
+# (optimizer.sh is sourced standalone by the test suite, where log_* may be absent).
+_wp_rewrite_msg() {
+    local level="$1" msg="$2"
+    if [ "$level" = warn ] && type -t log_warn &>/dev/null; then
+        log_warn "$msg"
+    elif type -t log_info &>/dev/null; then
+        log_info "$msg"
+    else
+        echo "$msg" >&2
+    fi
+}
+
+# Scan every WordPress server-block config in a directory for the missing
+# front-controller gap. Warns by default; injects only when ADD_WP_REWRITE=true.
+# This runs as a separate read-only pass (independent of include-injection skip
+# logic) so the warning still fires on re-runs where the include already exists.
+scan_wp_rewrite() {
+    local sites_dir="$1"
+    [ -n "$sites_dir" ] && [ -d "$sites_dir" ] || return 0
+
+    local site_conf
+    for site_conf in "$sites_dir"/*; do
+        [ -f "$site_conf" ] || continue
+        if type -t is_safe_config_file &>/dev/null && ! is_safe_config_file "$site_conf"; then
+            continue
+        fi
+
+        # Only consider files with an uncommented server block.
+        local noncomment
+        noncomment=$(grep -vE '^[[:space:]]*#' "$site_conf" 2>/dev/null || true)
+        printf '%s' "$noncomment" | grep -q 'server[[:space:]]*{' || continue
+
+        # Already routes to index.php -- nothing to do.
+        wp_has_rewrite "$site_conf" && continue
+
+        local site_name
+        site_name=$(basename "$site_conf")
+
+        # A non-front-controller `location /` exists: never blindly add a second
+        # one (nginx duplicate-location error). Flag for manual review instead.
+        if wp_has_location_root "$site_conf"; then
+            _wp_rewrite_msg warn "WordPress: '${site_name}' has a 'location /' block without try_files to /index.php -- review manually (pretty permalinks may 404)."
+            continue
+        fi
+
+        if [ "${ADD_WP_REWRITE:-false}" = true ]; then
+            if [ "${DRY_RUN:-false}" = true ]; then
+                _wp_rewrite_msg info "[DRY RUN] WordPress: would add permalink front controller (try_files -> /index.php) to '${site_name}'."
+            elif wp_inject_rewrite "$site_conf"; then
+                _wp_rewrite_msg info "WordPress: added permalink front controller (try_files -> /index.php) to '${site_name}'."
+            fi
+        else
+            _wp_rewrite_msg warn "WordPress: '${site_name}' has no try_files to /index.php -- pretty permalinks will return 404. nginx-optimizer does NOT add this by default; re-run with --add-wp-rewrite to insert it."
+        fi
+    done
+}
+
+################################################################################
 # Server Block Injection
 ################################################################################
 
@@ -626,6 +755,13 @@ inject_server_includes() {
     sites_dir=$(get_nginx_sites_dir)
     if [ -z "$sites_dir" ] || [ ! -d "$sites_dir" ]; then
         return 1
+    fi
+
+    # WordPress permalink check: warn (and optionally add) the front controller.
+    # Runs as a separate read-only pass so it fires even when the include is
+    # already present and the file would otherwise be skipped below.
+    if [[ "$include_name" == *wordpress* ]]; then
+        scan_wp_rewrite "$sites_dir"
     fi
 
     # Phase 1: Collect files to modify

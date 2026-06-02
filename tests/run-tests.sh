@@ -753,6 +753,112 @@ else
 fi
 
 ################################################################################
+# SECTION 16: WordPress Permalink Rewrite Detection
+################################################################################
+log_section "WordPress Permalink Rewrite Tests"
+
+# ADD_WP_REWRITE / DRY_RUN are read as globals inside scan_wp_rewrite (sourced
+# from optimizer.sh); export so shellcheck sees them as used across scopes.
+export ADD_WP_REWRITE DRY_RUN
+WP_CFG_DIR="${CONFIGS_DIR}/wordpress"
+
+# Functions come from optimizer.sh (sourced earlier in SECTION 11).
+if ! type -t wp_has_rewrite &>/dev/null; then
+    log_fail "wp_has_rewrite function missing"
+fi
+
+# (a) Config WITH try_files -> detected as present, no warning.
+if wp_has_rewrite "${WP_CFG_DIR}/basic-wordpress.conf"; then
+    log_pass "wp_has_rewrite detects existing try_files -> /index.php"
+else
+    log_fail "wp_has_rewrite missed existing try_files"
+fi
+
+# (b) Config WITHOUT try_files -> detected as missing.
+if wp_has_rewrite "${WP_CFG_DIR}/wordpress-no-rewrite.conf"; then
+    log_fail "wp_has_rewrite false positive on config without try_files"
+else
+    log_pass "wp_has_rewrite reports missing try_files"
+fi
+
+# Build isolated scan dirs under ~/.wp-test so they pass the path-safety gate
+# (is_safe_config_file only allows nginx dirs and ~/.wp-test/*).
+WP_TEST_ROOT="${HOME}/.wp-test"
+mkdir -p "$WP_TEST_ROOT"
+WP_SCAN_DIR=$(mktemp -d "${WP_TEST_ROOT}/scan-rewrite.XXXXXX")
+cp "${WP_CFG_DIR}/basic-wordpress.conf" "${WP_SCAN_DIR}/with-rewrite.conf"
+
+# (a) scan: config with rewrite produces NO warning.
+ADD_WP_REWRITE=false DRY_RUN=false scan_output=$(scan_wp_rewrite "$WP_SCAN_DIR" 2>&1 || true)
+if printf "%s" "$scan_output" | grep -qi "permalink\|404\|try_files"; then
+    log_fail "scan_wp_rewrite warned on a config that already has try_files"
+else
+    log_pass "scan_wp_rewrite silent when try_files present"
+fi
+
+# (b) scan: config without rewrite produces a 404 warning.
+cp "${WP_CFG_DIR}/wordpress-no-rewrite.conf" "${WP_SCAN_DIR}/no-rewrite.conf"
+ADD_WP_REWRITE=false DRY_RUN=false scan_warn=$(scan_wp_rewrite "$WP_SCAN_DIR" 2>&1 || true)
+if printf "%s" "$scan_warn" | grep -qi "404"; then
+    log_pass "scan_wp_rewrite warns about missing try_files (404)"
+else
+    log_fail "scan_wp_rewrite did not warn about missing try_files"
+fi
+
+# Warning must NOT auto-modify the file (overlay safety).
+if wp_has_rewrite "${WP_SCAN_DIR}/no-rewrite.conf"; then
+    log_fail "scan_wp_rewrite modified config without --add-wp-rewrite"
+else
+    log_pass "scan_wp_rewrite leaves config untouched by default"
+fi
+
+# (c) --add-wp-rewrite injects the block exactly once (idempotent).
+WP_INJECT_FILE="${WP_SCAN_DIR}/inject-target.conf"
+cp "${WP_CFG_DIR}/wordpress-no-rewrite.conf" "$WP_INJECT_FILE"
+wp_inject_rewrite "$WP_INJECT_FILE" >/dev/null 2>&1 || true
+count1=$(grep -cE 'try_files[[:space:]]+[^;]*/index\.php' "$WP_INJECT_FILE" || true)
+# Run again — must not duplicate (returns 2 = already present).
+wp_inject_rewrite "$WP_INJECT_FILE" >/dev/null 2>&1 || true
+count2=$(grep -cE 'try_files[[:space:]]+[^;]*/index\.php' "$WP_INJECT_FILE" || true)
+if [ "$count1" = "1" ] && [ "$count2" = "1" ]; then
+    log_pass "wp_inject_rewrite adds front controller once and is idempotent"
+else
+    log_fail "wp_inject_rewrite idempotency broken (run1=$count1 run2=$count2)"
+fi
+
+# (c) scan with ADD_WP_REWRITE=true injects via the orchestrator too.
+WP_SCAN2_DIR=$(mktemp -d "${WP_TEST_ROOT}/scan-inject.XXXXXX")
+cp "${WP_CFG_DIR}/wordpress-no-rewrite.conf" "${WP_SCAN2_DIR}/site.conf"
+ADD_WP_REWRITE=true DRY_RUN=false scan_wp_rewrite "$WP_SCAN2_DIR" >/dev/null 2>&1 || true
+if wp_has_rewrite "${WP_SCAN2_DIR}/site.conf"; then
+    log_pass "scan_wp_rewrite injects front controller with --add-wp-rewrite"
+else
+    log_fail "scan_wp_rewrite did not inject with --add-wp-rewrite"
+fi
+
+# Guard: existing `location /` without try_files must NOT get a second one.
+WP_GUARD_DIR=$(mktemp -d "${WP_TEST_ROOT}/scan-guard.XXXXXX")
+cat > "${WP_GUARD_DIR}/proxy.conf" <<'GUARD'
+server {
+    listen 80;
+    server_name proxy.example.com;
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+    }
+}
+GUARD
+ADD_WP_REWRITE=true DRY_RUN=false guard_out=$(scan_wp_rewrite "$WP_GUARD_DIR" 2>&1 || true)
+guard_count=$(grep -cE 'location[[:space:]]+/[[:space:]]*\{' "${WP_GUARD_DIR}/proxy.conf" || true)
+if [ "$guard_count" = "1" ] && printf "%s" "$guard_out" | grep -qi "review manually"; then
+    log_pass "scan_wp_rewrite refuses to add a duplicate location / (manual-review warning)"
+else
+    log_fail "scan_wp_rewrite mishandled existing location / (count=$guard_count)"
+fi
+
+# Cleanup
+rm -rf "$WP_SCAN_DIR" "$WP_SCAN2_DIR" "$WP_GUARD_DIR"
+
+################################################################################
 # Summary
 ################################################################################
 echo ""

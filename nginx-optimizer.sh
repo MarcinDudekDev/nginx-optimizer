@@ -66,6 +66,8 @@ TARGET_SITE=""
 SYSTEM_ONLY=false
 # shellcheck disable=SC2034  # Used by sourced library files (security.sh)
 NO_RATE_LIMIT=false
+# shellcheck disable=SC2034  # Used by sourced library files (optimizer.sh)
+ADD_WP_REWRITE=false
 
 # Allowed feature names for --feature flag
 ALLOWED_FEATURES=(
@@ -329,6 +331,9 @@ OPTIONS:
     --backup-dir <path>         Custom backup directory
     --system-only               Only operate on system nginx (skip wp-test)
     --no-rate-limit             Disable rate limiting in security config
+    --add-wp-rewrite            Add WordPress permalink front controller
+                                (try_files -> /index.php) if missing. Off by
+                                default; without it, missing rewrites only warn.
     --no-color                  Disable colored output (also: NO_COLOR env var)
     --check                     Pre-flight check (same as 'check' command)
     -v, --version               Show version
@@ -1385,6 +1390,12 @@ parse_arguments() {
             --no-rate-limit)
                 NO_RATE_LIMIT=true
                 export NO_RATE_LIMIT
+                shift
+                ;;
+            --add-wp-rewrite)
+                # shellcheck disable=SC2034  # Used by sourced library files (optimizer.sh)
+                ADD_WP_REWRITE=true
+                export ADD_WP_REWRITE
                 shift
                 ;;
             --no-color)
