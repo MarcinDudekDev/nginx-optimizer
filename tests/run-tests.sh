@@ -859,7 +859,45 @@ fi
 rm -rf "$WP_SCAN_DIR" "$WP_SCAN2_DIR" "$WP_GUARD_DIR"
 
 ################################################################################
-# SECTION 17: Shared RAM Budget (sysinfo)
+# SECTION 17: awk data-injection safety (issue #3)
+################################################################################
+log_section "awk Injection Safety"
+
+# awk applies ESCAPE PROCESSING to every -v assignment, so a value containing a
+# literal backslash-n becomes a real newline and injects a second nginx
+# directive. ENVIRON[] does no such processing. This is the actual exposure —
+# bash never evaluates $(..)/backticks inside a variable's value, so shell
+# execution was never possible here.
+awk_evil='snippets/x.conf;\n    return 444'
+
+# The vulnerable form, kept as the control: it must still split into two lines.
+awk_vuln_lines=$(awk -v f="$awk_evil" 'BEGIN{print "    include " f ";"}' | grep -c .)
+if [ "$awk_vuln_lines" -eq 2 ]; then
+    log_pass "Control: awk -v does expand \\n into a second directive (2 lines)"
+else
+    log_fail "Control failed — awk -v produced $awk_vuln_lines lines, expected 2"
+fi
+
+# The form the code now uses must keep it to a single directive.
+awk_safe_lines=$(AWK_F="$awk_evil" awk 'BEGIN{print "    include " ENVIRON["AWK_F"] ";"}' | grep -c .)
+if [ "$awk_safe_lines" -eq 1 ]; then
+    log_pass "ENVIRON[] keeps an escaped value on one line (no directive injection)"
+else
+    log_fail "ENVIRON[] leaked a newline — $awk_safe_lines lines, expected 1"
+fi
+
+# No injection site may pass a PATH through -v. Numeric tuning values are fine
+# (they cannot carry an escape), so only flag the path-carrying variables.
+awk_bad_sites=$(grep -rn 'awk -v \(include_line\|include_file\|snippets\)=' \
+    "${SCRIPT_DIR}/../nginx-optimizer-lib/"*.sh "${SCRIPT_DIR}/../lib/features/"*.sh 2>/dev/null || true)
+if [ -z "$awk_bad_sites" ]; then
+    log_pass "No path-carrying awk -v assignments remain in injection code"
+else
+    log_fail "Path passed via awk -v (use ENVIRON): $awk_bad_sites"
+fi
+
+################################################################################
+# SECTION 18: Shared RAM Budget (sysinfo)
 ################################################################################
 log_section "RAM Budget Tests"
 

@@ -818,8 +818,20 @@ inject_server_includes() {
 
         # Inject include directive into server block
         # Strategy: prefer after "listen 443 ssl", fallback to after "server_name"
-        awk -v include_line="    include ${include_file};" '
-        BEGIN { injected = 0 }
+        # Pass include_file through the ENVIRONMENT, not -v, and build the
+        # directive inside awk.
+        #
+        # awk applies escape processing to every -v assignment, so a name
+        # containing a literal backslash-n becomes a real NEWLINE in the output
+        # and injects a second nginx directive:
+        #   -v f='a.conf;\n    return 444'  ->  include a.conf;
+        #                                        return 444;
+        # ENVIRON[] performs no such processing and reproduces the name verbatim.
+        # (Bash itself never evaluates $(..) or backticks inside a variable's
+        # value, so shell execution was never the exposure here — config-line
+        # injection is.)
+        INCLUDE_FILE="$include_file" awk '
+        BEGIN { injected = 0; include_line = "    include " ENVIRON["INCLUDE_FILE"] ";" }
         {
             line = $0
             print line

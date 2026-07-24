@@ -408,8 +408,12 @@ _fastcgi_inject_system() {
         # Two-phase injection with awk:
         # 1. After server_name (or listen 443 ssl): include server-level skip rules
         # 2. Inside location ~ \.php$ block, after fastcgi_pass: include cache directives
-        awk -v snippets="$snippets_dir" '
-        BEGIN { server_injected = 0; in_php_location = 0; php_injected = 0 }
+        # snippets_dir goes through the environment, not -v: awk applies escape
+        # processing to -v values, so a path containing a literal backslash-n
+        # would break the include across two nginx directives. See the same
+        # treatment in inject_server_includes() (nginx-optimizer-lib/optimizer.sh).
+        SNIPPETS_DIR="$snippets_dir" awk '
+        BEGIN { snippets = ENVIRON["SNIPPETS_DIR"]; server_injected = 0; in_php_location = 0; php_injected = 0 }
         {
             line = $0
             print line
