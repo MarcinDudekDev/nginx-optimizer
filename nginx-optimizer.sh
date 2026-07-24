@@ -1188,7 +1188,10 @@ cmd_honeypot() {
 
         echo ""
         log_info "Next steps:"
-        log_info "1. Add to your nginx site config:"
+        log_info "1. Add BOTH includes — they go in different contexts:"
+        echo "   # in http context (e.g. conf.d/): log_format, rate-limit zone, scanner map"
+        echo "   include ${TEMPLATE_DIR}/honeypot-tarpit-http.conf;"
+        echo "   # inside your server { } block: the honeypot locations"
         echo "   include ${TEMPLATE_DIR}/honeypot-tarpit.conf;"
         echo ""
         log_info "2. Test nginx config:"

@@ -8,6 +8,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIGS_DIR="${SCRIPT_DIR}/configs"
 TEMPLATES_DIR="${SCRIPT_DIR}/../nginx-optimizer-templates"
+WRAPPERS_DIR="${SCRIPT_DIR}/wrappers"
 
 # Colors
 RED='\033[0;31m'
@@ -135,8 +136,34 @@ for tmpl in "${TEMPLATES_DIR}"/*.conf; do
     [ -f "$tmpl" ] || continue
     name=$(basename "$tmpl")
 
-    # Create a temp wrapper that includes the template
     tmpdir=$(mktemp -d)
+
+    # Per-template wrapper: some templates need context the generic wrapper
+    # cannot supply (a limit_req_zone, a map, a fastcgi_cache_path). If
+    # tests/wrappers/<name> exists, use it — @INCLUDE@ marks the insertion point.
+    # See tests/wrappers/README.md.
+    if [ -f "${WRAPPERS_DIR}/$name" ]; then
+        include_line="        include /etc/nginx/templates/$name;"
+        awk -v inc="$include_line" '{ if ($0 == "@INCLUDE@") print inc; else print }' \
+            "${WRAPPERS_DIR}/$name" > "$tmpdir/nginx.conf"
+
+        if docker run --rm \
+            -v "$tmpdir/nginx.conf:/etc/nginx/nginx.conf:ro" \
+            -v "${TEMPLATES_DIR}:/etc/nginx/templates:ro" \
+            nginx:latest nginx -t 2>/dev/null; then
+            log_pass "template: $name (wrapper context)"
+        else
+            wrapper_err=$(docker run --rm \
+                -v "$tmpdir/nginx.conf:/etc/nginx/nginx.conf:ro" \
+                -v "${TEMPLATES_DIR}:/etc/nginx/templates:ro" \
+                nginx:latest nginx -t 2>&1 | grep -E "emerg" | head -1)
+            log_fail "template: $name (wrapper context): $wrapper_err"
+        fi
+        rm -rf "$tmpdir"
+        continue
+    fi
+
+    # Create a temp wrapper that includes the template
     cat > "$tmpdir/nginx.conf" << WRAPPER
 events { worker_connections 1024; }
 http {
@@ -173,7 +200,23 @@ WRAPPER2
             nginx:latest nginx -t 2>/dev/null; then
             log_pass "template: $name (server context)"
         else
-            log_skip "template: $name (context-dependent, manual review needed)"
+            # Distinguish "needs a module stock nginx lacks" from "we have not
+            # written a wrapper yet". The first is a permanent, legitimate skip;
+            # the second is missing coverage and should be fixed with a wrapper
+            # in tests/wrappers/. A skip that does not say which is which reads
+            # as covered when it is not.
+            # `|| true` on BOTH stages: under `set -euo pipefail` a non-matching
+            # grep (and nginx -t's own non-zero exit) would abort the suite.
+            skip_out=$(docker run --rm \
+                -v "$tmpdir/nginx.conf:/etc/nginx/nginx.conf:ro" \
+                -v "$tmpl:/etc/nginx/templates/$name:ro" \
+                nginx:latest nginx -t 2>&1 || true)
+            skip_err=$(printf '%s' "$skip_out" | grep -oE 'unknown directive "[^"]+"' | head -1 || true)
+            if [ -n "$skip_err" ]; then
+                log_skip "template: $name (needs a third-party module: $skip_err)"
+            else
+                log_skip "template: $name (NO WRAPPER YET — add tests/wrappers/$name)"
+            fi
         fi
     fi
 

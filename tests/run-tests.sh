@@ -859,7 +859,64 @@ fi
 rm -rf "$WP_SCAN_DIR" "$WP_SCAN2_DIR" "$WP_GUARD_DIR"
 
 ################################################################################
-# SECTION 17: verify detection fallback (issue #1)
+# SECTION 17: template test wrappers (issue #2)
+################################################################################
+log_section "Template Wrapper Coverage"
+
+WRAPPERS_DIR="${SCRIPT_DIR}/wrappers"
+
+# Every wrapper must carry the @INCLUDE@ token — without it the template is
+# never actually included and the wrapper "passes" while testing nothing.
+wrapper_token_ok=true
+for w in "${WRAPPERS_DIR}"/*.conf; do
+    [ -f "$w" ] || continue
+    if ! grep -q '@INCLUDE@' "$w"; then
+        wrapper_token_ok=false
+        echo "  $(basename "$w") has no @INCLUDE@ token"
+    fi
+done
+if [ "$wrapper_token_ok" = true ]; then
+    log_pass "Every test wrapper contains the @INCLUDE@ insertion token"
+else
+    log_fail "A wrapper is missing @INCLUDE@ — it would pass without including the template"
+fi
+
+# A wrapper is only meaningful if a template of that name exists.
+wrapper_orphan_ok=true
+for w in "${WRAPPERS_DIR}"/*.conf; do
+    [ -f "$w" ] || continue
+    if [ ! -f "${SCRIPT_DIR}/../nginx-optimizer-templates/$(basename "$w")" ]; then
+        wrapper_orphan_ok=false
+        echo "  orphan wrapper: $(basename "$w")"
+    fi
+done
+if [ "$wrapper_orphan_ok" = true ]; then
+    log_pass "No orphan wrappers (each maps to a real template)"
+else
+    log_fail "Wrapper exists for a template that does not"
+fi
+
+# The honeypot template was split because its http-context directives cannot
+# live in a server block — which is where the honeypot command tells users to
+# put it. Pin the split so a future edit cannot silently merge them back.
+HP_HTTP="${SCRIPT_DIR}/../nginx-optimizer-templates/honeypot-tarpit-http.conf"
+HP_SRV="${SCRIPT_DIR}/../nginx-optimizer-templates/honeypot-tarpit.conf"
+if [ -f "$HP_HTTP" ] && grep -q "log_format honeypot_log" "$HP_HTTP" && \
+   ! grep -qE '^\s*log_format|^\s*limit_req_zone|^\s*map ' "$HP_SRV"; then
+    log_pass "honeypot template split: http directives are out of the server-context file"
+else
+    log_fail "honeypot-tarpit.conf carries http-only directives — including it in a server block breaks nginx"
+fi
+
+# The honeypot command must tell users about BOTH includes, not just one.
+if grep -q "honeypot-tarpit-http.conf" "${OPTIMIZER}"; then
+    log_pass "honeypot command documents the http-context include"
+else
+    log_fail "honeypot command still points users at one include only"
+fi
+
+################################################################################
+# SECTION 18: verify detection fallback (issue #1)
 ################################################################################
 log_section "verify Detection Fallback"
 
@@ -948,7 +1005,7 @@ else
 fi
 
 ################################################################################
-# SECTION 18: awk data-injection safety (issue #3)
+# SECTION 19: awk data-injection safety (issue #3)
 ################################################################################
 log_section "awk Injection Safety"
 
@@ -986,7 +1043,7 @@ else
 fi
 
 ################################################################################
-# SECTION 19: Shared RAM Budget (sysinfo)
+# SECTION 20: Shared RAM Budget (sysinfo)
 ################################################################################
 log_section "RAM Budget Tests"
 
