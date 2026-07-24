@@ -859,7 +859,96 @@ fi
 rm -rf "$WP_SCAN_DIR" "$WP_SCAN2_DIR" "$WP_GUARD_DIR"
 
 ################################################################################
-# SECTION 17: awk data-injection safety (issue #3)
+# SECTION 17: verify detection fallback (issue #1)
+################################################################################
+log_section "verify Detection Fallback"
+
+# Injection-based features (fastcgi-cache, opcache, redis, security) leave no
+# standalone template file, so verify's file check always reported them missing.
+# The fallback asks the registry's own detection patterns instead.
+#
+# BOTH DIRECTIONS MATTER. A fallback that is too loose turns verify into a
+# function that always says yes, which is strictly worse than always saying no —
+# so the absent case is tested as carefully as the present case.
+
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/../lib/registry.sh" 2>/dev/null || true
+for vf in "${SCRIPT_DIR}/../lib/features/"*.sh; do
+    # shellcheck source=/dev/null
+    source "$vf" 2>/dev/null || true
+done
+
+if type -t feature_detect &>/dev/null; then
+    VERIFY_DIR=$(mktemp -d)
+
+    # (a) A config carrying an INJECTED fastcgi-cache include must be detected.
+    cat > "${VERIFY_DIR}/injected.conf" <<'VCONF'
+server {
+    listen 443 ssl;
+    server_name injected.example.com;
+    include /etc/nginx/snippets/fastcgi-cache.conf;
+    location ~ \.php$ {
+        fastcgi_pass unix:/run/php/php-fpm.sock;
+        include /etc/nginx/snippets/fastcgi-cache-location.conf;
+    }
+}
+VCONF
+    if feature_detect "fastcgi-cache" "${VERIFY_DIR}/injected.conf" "" 2>/dev/null; then
+        log_pass "feature_detect finds an injected fastcgi-cache include (no template file)"
+    else
+        log_fail "feature_detect missed an injected fastcgi-cache include — fallback is useless"
+    fi
+
+    # (b) A bare config with NO trace of the feature must still report absent.
+    #
+    # These detectors intentionally also consult the HOST's conf.d, because a
+    # global http-context directive really does apply to every site — correct for
+    # `analyze`, and correct for verify too (the artifact is still installed).
+    # To test the pattern logic rather than this machine's state, point the
+    # conf.d lookup at an empty directory for the duration of this check.
+    VERIFY_EMPTY_CONFD="${VERIFY_DIR}/empty-confd"
+    mkdir -p "$VERIFY_EMPTY_CONFD"
+    get_nginx_confd_dir() { echo "$VERIFY_EMPTY_CONFD"; }
+
+    cat > "${VERIFY_DIR}/bare.conf" <<'VCONF'
+server {
+    listen 80;
+    server_name bare.example.com;
+    location / {
+        try_files $uri $uri/ /index.php?$args;
+    }
+}
+VCONF
+    if feature_detect "fastcgi-cache" "${VERIFY_DIR}/bare.conf" "" 2>/dev/null; then
+        log_fail "feature_detect false-positived on a config with no fastcgi-cache — verify would always say yes"
+    else
+        log_pass "feature_detect reports absent on a bare config (no false positive)"
+    fi
+    unset -f get_nginx_confd_dir
+
+    # (c) The helper wired into cmd_verify must exist and be callable.
+    if grep -q "_verify_feature_detected" "${OPTIMIZER}" && \
+       grep -q "_verify_config_files" "${OPTIMIZER}"; then
+        log_pass "cmd_verify wires in the detection fallback helpers"
+    else
+        log_fail "cmd_verify detection fallback helpers missing"
+    fi
+
+    # (d) The fallback must only run AFTER the template check fails, so a
+    #     template-verified feature is never relabelled.
+    if grep -q 'still_present" = false ] && _verify_feature_detected' "${OPTIMIZER}"; then
+        log_pass "Detection fallback runs only when the template check fails"
+    else
+        log_fail "Detection fallback is not gated on the template check failing"
+    fi
+
+    rm -rf "$VERIFY_DIR"
+else
+    log_skip "feature_detect unavailable — registry not sourced"
+fi
+
+################################################################################
+# SECTION 18: awk data-injection safety (issue #3)
 ################################################################################
 log_section "awk Injection Safety"
 
@@ -897,7 +986,7 @@ else
 fi
 
 ################################################################################
-# SECTION 18: Shared RAM Budget (sysinfo)
+# SECTION 19: Shared RAM Budget (sysinfo)
 ################################################################################
 log_section "RAM Budget Tests"
 

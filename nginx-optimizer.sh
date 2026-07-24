@@ -915,6 +915,48 @@ cmd_remove() {
     fi
 }
 
+# Enumerate the config files this tool writes into, for verify's detection pass.
+# Prints one path per line. Deliberately disk-based: verify must work when nginx
+# is not running, so `nginx -T` is not an option here.
+_verify_config_files() {
+    local d f
+    for d in "$(get_nginx_confd_dir 2>/dev/null)" "$(get_nginx_sites_dir 2>/dev/null)" \
+             "${WP_TEST_NGINX:-$HOME/.wp-test/nginx}/conf.d" \
+             "${WP_TEST_NGINX:-$HOME/.wp-test/nginx}/vhost.d"; do
+        [ -n "$d" ] && [ -d "$d" ] || continue
+        for f in "$d"/*; do
+            [ -f "$f" ] && echo "$f"
+        done
+    done
+    f=$(get_main_nginx_conf 2>/dev/null)
+    [ -n "$f" ] && [ -f "$f" ] && echo "$f"
+}
+
+# Fallback presence check for INJECTION-based features (fastcgi-cache, opcache,
+# redis, security), which leave no standalone template file in conf.d and so
+# always failed verify's file check — issue #1.
+#
+# This asks the registry the same question `analyze` asks, via each feature's own
+# registered detection pattern. It is deliberately NOT a blanket "assume present":
+# a feature that is genuinely gone must still report missing, or verify degrades
+# into a function that always says yes — worse than the bug it replaces.
+# Returns: 0 if detected in any config file, 1 otherwise
+_verify_feature_detected() {
+    local feature_id="$1" site="${2:-}"
+    local conf
+
+    type -t feature_detect &>/dev/null || return 1
+
+    while IFS= read -r conf; do
+        [ -n "$conf" ] || continue
+        if feature_detect "$feature_id" "$conf" "$site" 2>/dev/null; then
+            return 0
+        fi
+    done <<< "$(_verify_config_files)"
+
+    return 1
+}
+
 cmd_verify() {
     if type -t ui_header &>/dev/null; then
         ui_header
@@ -971,12 +1013,22 @@ cmd_verify() {
             fi
         fi
 
+        # Fallback: injection-based features leave no template file in conf.d,
+        # so ask the registry's detection patterns before declaring them missing.
+        local verified_via="template"
+        if [ "$still_present" = false ] && _verify_feature_detected "$feature_id" "${TARGET_SITE:-}"; then
+            still_present=true
+            verified_via="detection"
+        fi
+
         if [ "$still_present" = true ]; then
             v_ok=$((v_ok + 1))
+            local via_note=""
+            [ "$verified_via" = "detection" ] && via_note=" (injected — matched by detection)"
             if type -t ui_step &>/dev/null; then
-                ui_step "$display_name: verified"
+                ui_step "$display_name: verified${via_note}"
             else
-                log_success "  $display_name: verified"
+                log_success "  $display_name: verified${via_note}"
             fi
         else
             v_miss=$((v_miss + 1))
