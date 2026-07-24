@@ -63,7 +63,7 @@ echo "Testing config corpus..."
 # These get mounted as /etc/nginx/nginx.conf, not as a conf.d include
 FULL_NGINX_CONFIGS="nginx-with-includes.conf nginx-official-default.conf \
 debian-ubuntu-default.conf ubuntu-gzip-commented.conf alpine-minimal.conf \
-h5bp-main-nginx.conf cpanel-main-nginx.conf"
+cpanel-main-nginx.conf"
 
 # Configs that need brotli module (not in stock nginx)
 BROTLI_CONFIGS="already-optimized.conf"
@@ -75,6 +75,11 @@ BROTLI_CONFIGS="already-optimized.conf"
 # so these are asserted in the failing direction. See tests/configs/invalid/README.md.
 ################################################################################
 
+invalid_count=$(find "${CONFIGS_DIR}/invalid" -name '*.conf' 2>/dev/null | wc -l | tr -d ' ')
+if [ "$invalid_count" -eq 0 ]; then
+    log_fail "no fixtures in tests/configs/invalid/ — the negative assertions are not running"
+fi
+
 for conf in "${CONFIGS_DIR}"/invalid/*.conf; do
     [ -f "$conf" ] || continue
     name=$(basename "$conf")
@@ -85,9 +90,11 @@ for conf in "${CONFIGS_DIR}"/invalid/*.conf; do
     fi
 done
 
-for conf in "${CONFIGS_DIR}"/*.conf "${CONFIGS_DIR}"/**/*.conf; do
+# `find`, not `"$CONFIGS_DIR"/**/*.conf`: without globstar `**` collapses to `*`, so a
+# config nested any deeper than one level would get shape coverage from
+# test-corpus.sh and never be handed to nginx -t here.
+while IFS= read -r conf; do
     [ -f "$conf" ] || continue
-    case "$conf" in */invalid/*) continue ;; esac
     name=$(basename "$conf")
 
     # Skip brotli-dependent configs (stock nginx doesn't have brotli module)
@@ -113,10 +120,9 @@ for conf in "${CONFIGS_DIR}"/*.conf "${CONFIGS_DIR}"/**/*.conf; do
         # SSL config — create a wrapper that mounts our test certs
         tmpdir=$(mktemp -d)
 
-        # Rewrite all cert paths to use our test certs.
-        # Order matters: the longer directive names must be substituted before the
-        # `ssl_certificate ` prefix they share, or `ssl_certificate_key` becomes
-        # `ssl_certificate` and the key is silently lost.
+        # Rewrite all cert paths to use our test certs. Each pattern is anchored on
+        # the trailing space, so `ssl_certificate .*` cannot swallow
+        # `ssl_certificate_key`; the order below is for readability, not correctness.
         sed \
             -e 's|ssl_certificate_key .*|ssl_certificate_key /etc/nginx/ssl/privkey.pem;|g' \
             -e 's|ssl_trusted_certificate .*|ssl_trusted_certificate /etc/nginx/ssl/fullchain.pem;|g' \
@@ -149,7 +155,7 @@ for conf in "${CONFIGS_DIR}"/*.conf "${CONFIGS_DIR}"/**/*.conf; do
             log_fail "$name: $local_err"
         fi
     fi
-done
+done < <(find "$CONFIGS_DIR" -name '*.conf' -not -path '*/invalid/*' | sort)
 
 ################################################################################
 # Template Snippet Tests

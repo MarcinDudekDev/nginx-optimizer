@@ -9,7 +9,7 @@ complex/multi-server-api-gateway.conf	complex-multi-server-api-gateway	fleet	fro
 complex/multi-site-wordpress.conf	complex-multisite-subdir-map	upstream	https://developer.wordpress.org/advanced-administration/server/web-server/nginx/
 complex/nginx-with-includes.conf	complex-modular-includes	crafted	crafted modular production layout
 distro-defaults/alpine-minimal.conf	distro-default-alpine	fleet	frog03 (Mikrus Frog, 256MB Alpine):/etc/nginx/nginx.conf
-distro-defaults/debian-ubuntu-default.conf	distro-default-debian	upstream	anna152:/etc/nginx/nginx.conf (Debian 12 / nginx.org package, stock layout)
+distro-defaults/debian-ubuntu-default.conf	distro-default-debian	fleet	anna152:/etc/nginx/nginx.conf (Debian 12 / nginx.org package, stock layout)
 distro-defaults/ubuntu-gzip-commented.conf	distro-default-gzip-disabled	fleet	ivy187:/etc/nginx/nginx.conf (Ubuntu 22.04 stock, gzip block commented out)
 edge-cases/already-optimized.conf	edge-already-optimized	crafted	crafted regression fixture
 edge-cases/comments-heavy.conf	edge-comment-dense	crafted	crafted regression fixture

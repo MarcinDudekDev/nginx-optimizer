@@ -53,8 +53,8 @@ WRITE_MANIFEST=0
 
 # `find` rather than a glob: the corpus is two levels deep and bash here has no
 # globstar, so `**/*.conf` would silently mean the same as `*/*.conf`.
-# No mapfile and no `declare -A` anywhere in this file: run-tests.sh asserts the
-# tree stays bash 3.2 compatible, which is what macOS ships.
+# No mapfile and no `declare -A` anywhere in this file: macOS ships bash 3.2 and
+# run-tests.sh asserts the whole tree — tests/ included — stays compatible.
 CONFIGS=()
 while IFS= read -r line; do CONFIGS+=("$line"); done < <(find "$CONFIGS_DIR" -name '*.conf' -not -path '*/invalid/*' | sort)
 INVALID=()
@@ -124,6 +124,13 @@ while IFS= read -r line; do REQUIRED+=("$line"); done < <(
     awk '/^## Backlog/ { exit } /^\| `/ { print }' "$SHAPES_FILE" \
     | sed -E 's/^\| `([a-z0-9-]+)`.*/\1/' | sort -u
 )
+
+# A coverage check that extracts zero shapes asserts nothing and still prints PASS.
+# The floor is what stops a SHAPES.md reformat from silently disarming this script.
+MIN_REQUIRED_SHAPES=30
+if [ "${#REQUIRED[@]}" -lt "$MIN_REQUIRED_SHAPES" ]; then
+    log_fail "only ${#REQUIRED[@]} required shapes parsed out of SHAPES.md (floor is $MIN_REQUIRED_SHAPES) — the table format probably changed and this check is no longer asserting anything"
+fi
 
 uncovered=""
 for shape in "${REQUIRED[@]}"; do
@@ -229,11 +236,15 @@ generate_manifest() {
             /^#[[:space:]]*Provenance:/ { on = 1; sub(/^#[[:space:]]*Provenance:[[:space:]]*/, ""); print; next }
             on && /^#[[:space:]][[:space:]][[:space:]]+/ { sub(/^#[[:space:]]+/, ""); print; next }
             on { exit }' | tr '\n' ' ' | sed -e 's/[[:space:]]*$//')
+        # Fleet is matched BEFORE the URL/vendor patterns. A fleet provenance often
+        # mentions a vendor in its parenthetical — "anna152:/etc/nginx/nginx.conf
+        # (Debian 12 / nginx.org package)" — and was being filed as upstream. The
+        # fleet patterns need a literal "<host>:/<abs-path>", which no URL matches.
         case "$src" in
             *DERIVED*|derived*)      ptype=derived ;;
             crafted*)                ptype=crafted ;;
-            http*|*github.com*|*nginx.org*|*wordpress.org*|*mozilla*) ptype=upstream ;;
-            *:/etc/*|*:/*)           ptype=fleet ;;
+            *:/etc/*|*:/var/*|*:/home/*|*:/opt/*|*:/srv/*|*:/usr/*) ptype=fleet ;;
+            http*|*://*|*github.com*|*nginx.org*|*wordpress.org*|*mozilla*) ptype=upstream ;;
             *)                       ptype=other ;;
         esac
         printf '%s\t%s\t%s\t%s\n' "$rel" "$shape" "$ptype" "$src"

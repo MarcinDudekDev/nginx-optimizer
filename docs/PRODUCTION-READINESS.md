@@ -201,24 +201,37 @@ limit_req_zone $binary_remote_addr zone=general:10m rate=15r/s;
 | Performance/memory testing | Missing | Low |
 | ARM architecture (Pi, M1) | Missing | Low |
 
-### 3.3 Config Corpus Strategy
+### 3.3 Config Corpus Strategy — **built**
+
+49 valid configs + 3 negative fixtures. `tests/configs/SHAPES.md` is the required-shape
+checklist; `tests/test-corpus.sh` enforces it.
+
 ```
-tests/
-├── configs/
-│   ├── minimal/          # Bare minimum valid configs
-│   ├── wordpress/        # WordPress-specific configs
-│   ├── reverse-proxy/    # Pure proxy configs
-│   ├── complex/          # Multi-site, includes, maps
-│   ├── edge-cases/       # Weird but valid configs
-│   └── broken/           # Intentionally invalid (should fail gracefully)
-├── expected/             # Expected output after optimization
-└── fixtures/             # Mock data for unit tests
+tests/configs/
+├── SHAPES.md          # The required-shape checklist (enforced)
+├── MANIFEST.tsv       # Generated: path, shape id, provenance type, source
+├── minimal/           # Stock nginx default, H5BP fragment, smallest static+PHP vhost
+├── distro-defaults/   # Debian/Ubuntu, Ubuntu with gzip commented out, Alpine
+├── panel-generated/   # cPanel EA4 main config + service vhost
+├── wordpress/         # Plain, TLS, no-rewrite, microcache, WooCommerce, multisite, Bedrock
+├── reverse-proxy/     # Keepalive, LB, sticky hash, WebSocket, gRPC, SSE, unix socket
+├── app-stacks/        # Laravel, Django/uWSGI, Node, static SPA, Next.js
+├── tls/               # Certbot, Cloudflare origin CA, HTTP/3 QUIC, mutual TLS, OCSP
+├── complex/           # Multisite maps, modular includes, multi-server API gateway
+├── edge-cases/        # Already-optimized, comment-dense, CRLF, nested, duplicate names
+└── invalid/           # Negative fixtures — asserted to FAIL nginx -t
 ```
 
-Source configs from:
-- GitHub search: `filename:nginx.conf`
-- DigitalOcean community configs
-- nginx.org examples
+Where the configs came from (see `MANIFEST.tsv` for the per-file record):
+- 17 pulled off live fleet hosts (anna152, ivy187, ewa117, frog03)
+- 15 from named upstream projects (nginx.org, WordPress.org, Laravel, cPanel EA4,
+  Mozilla SSL config generator, H5BP)
+- 3 derived from documented patterns with no canonical file, marked as such
+- 17 crafted regression and negative fixtures
+
+Shapes still wanted but not sourced (Plesk, DirectAdmin, CyberPanel, RHEL-family,
+Rails/Passenger) are an explicit backlog in `SHAPES.md` with a blocker recorded for
+each, printed on every `test-corpus.sh` run.
 - WordPress hosting guides (Starter templates)
 
 ---

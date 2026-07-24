@@ -83,10 +83,21 @@ else
     log_pass "No 'find -printf'"
 fi
 
-if grep -r "declare -A" "${SCRIPT_DIR}/../nginx-optimizer-lib/" 2>/dev/null; then
-    log_fail "Found bash 4+ 'declare -A'"
+# Covers tests/ as well as the lib: tests/test-corpus.sh states the bash 3.2
+# guarantee in its own header, so something has to actually hold it to that.
+# The pattern is assembled from fragments so this check does not match itself —
+# a self-matching grep here fails on a clean tree and teaches everyone to ignore it.
+# Comment lines are dropped too: test-corpus.sh mentions `mapfile` in prose.
+bash4_pat="decl""are -A|map""file |read""array "
+bash4_hits=$(grep -rEn "$bash4_pat" \
+    "${SCRIPT_DIR}/../nginx-optimizer-lib/" \
+    "${SCRIPT_DIR}/run-tests.sh" "${SCRIPT_DIR}/test-corpus.sh" \
+    "${SCRIPT_DIR}/test-with-nginx.sh" 2>/dev/null \
+    | grep -v ":[0-9]*:[[:space:]]*#" || true)
+if [ -n "$bash4_hits" ]; then
+    log_fail "Found bash 4+ constructs (macOS ships bash 3.2): $bash4_hits"
 else
-    log_pass "No 'declare -A'"
+    log_pass "No bash 4+ constructs in lib or tests"
 fi
 
 if grep -r "\bflock\b" "${SCRIPT_DIR}/../nginx-optimizer.sh" "${SCRIPT_DIR}/../nginx-optimizer-lib/"*.sh 2>/dev/null | grep -v "#"; then
