@@ -590,15 +590,26 @@ fi
 ################################################################################
 log_section "Config Corpus Validation"
 
-if command -v nginx &>/dev/null; then
-    for conf in "${CONFIGS_DIR}"/**/*.conf; do
-        [ -f "$conf" ] || continue
-        name=$(basename "$conf")
-        log_skip "$name (needs Docker nginx)"
-    done
+# This section used to emit one skip line per corpus file without ever validating
+# anything — 52 lines of noise that read as coverage. Corpus parsing belongs to
+# tests/test-with-nginx.sh (real nginx in Docker, and it asserts invalid/ FAILS,
+# which a local `nginx -t` loop here would get backwards). Shape coverage belongs
+# to tests/test-corpus.sh. What is worth checking here is that the corpus and the
+# scripts that police it still exist and agree on where things live.
+corpus_count=$(find "${CONFIGS_DIR}" -name '*.conf' -not -path '*/invalid/*' | wc -l | tr -d ' ')
+if [ "$corpus_count" -ge 30 ]; then
+    log_pass "Config corpus present ($corpus_count valid configs)"
 else
-    log_skip "nginx not installed - skipping config validation"
+    log_fail "Config corpus too small: $corpus_count (floor is 30)"
 fi
+
+if [ -x "${SCRIPT_DIR}/test-corpus.sh" ] && [ -f "${CONFIGS_DIR}/SHAPES.md" ]; then
+    log_pass "Corpus shape checklist and coverage script present"
+else
+    log_fail "Missing tests/test-corpus.sh or tests/configs/SHAPES.md"
+fi
+
+log_skip "Corpus nginx -t validation (run ./tests/test-with-nginx.sh — needs Docker)"
 
 ################################################################################
 # SECTION 11: State Tracking Tests
