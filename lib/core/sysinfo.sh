@@ -215,20 +215,23 @@ sysinfo_keepalive_connections() {
 }
 
 # Get recommended PHP-FPM max_children
-# Budget: 50% of total RAM for PHP, 40MB per worker average
+# Uses min(RAM-based, CPU-based) with sanity bounds
+# RAM: 50% of total RAM / 40MB per worker
+# CPU: cores × 10 (WordPress/WooCommerce mixed CPU + I/O workload)
 # Prints: integer value
 sysinfo_fpm_max_children() {
-    local ram_mb
+    local ram_mb cores
     ram_mb=$(sysinfo_ram_mb)
+    cores=$(sysinfo_cpu_cores)
     local php_ram=$(( ram_mb / 2 ))
-    local children=$(( php_ram / 40 ))
+    local ram_based=$(( php_ram / 40 ))
+    local cpu_cap=$(( cores * 10 ))
+    [[ $cpu_cap -lt 3 ]] && cpu_cap=3
 
-    # Sanity bounds
-    if [[ $children -lt 3 ]]; then
-        children=3
-    elif [[ $children -gt 200 ]]; then
-        children=200
-    fi
+    local children=$ram_based
+    [[ $children -gt $cpu_cap ]] && children=$cpu_cap
+    [[ $children -lt 3 ]] && children=3
+    [[ $children -gt 200 ]] && children=200
 
     echo "$children"
 }
@@ -265,6 +268,97 @@ sysinfo_conn_limit_per_server() {
     esac
 }
 
+################################################################################
+# OpCache Sizing (RAM-aware)
+################################################################################
+# OpCache has three INDEPENDENT hard ceilings and NO eviction policy. When any
+# one is hit, new files are simply never cached: they recompile on every single
+# request, forever, with no log line, no counter and no restart. A store can sit
+# at a 99% "hit rate" while recompiling ~1200 files per page view.
+#
+# The ceilings belong to the PHP-FPM POOL, not to one site. Production, staging,
+# dev and every neighbouring vhost under the same FPM master draw from one
+# buffer, so we size for the sum of working sets, not for a single site.
+#
+# Reference measurements (WP + WooCommerce + 6 popular plugins, PHP 8.5):
+#   ~5,200 hash slots, ~99MB of opcodes, ~22MB of interned strings per store.
+# Source: shift64.com "1,200 Recompiles per Page View" benchmark, July 2026.
+
+# Get recommended opcache.memory_consumption in MB
+# NOTE: interned_strings_buffer is carved OUT of this value, not added to it.
+# Effective opcode budget = memory_consumption - interned_strings_buffer.
+# Prints: integer value (MB)
+sysinfo_opcache_memory() {
+    local tier
+    tier=$(sysinfo_ram_tier)
+
+    case $tier in
+        1) echo 64 ;;    # 512MB VPS: 56MB of opcode - one lean site only
+        2) echo 96 ;;    # 1GB VPS
+        3) echo 160 ;;   # 2GB VPS: 144MB opcode, fits one equipped Woo store
+        4) echo 192 ;;   # 4GB VPS
+        5) echo 256 ;;   # 8GB VPS: 224MB opcode, room for two stores
+        6) echo 384 ;;   # 16GB+:   336MB opcode, room for a busy pool
+    esac
+}
+
+# Get recommended opcache.interned_strings_buffer in MB
+# Deduplicated class/function names, literals and docblocks, shared across all
+# workers. When full, new strings stop being interned and duplicate into every
+# worker's PRIVATE memory instead. One equipped Woo store measures ~22MB.
+# Prints: integer value (MB)
+sysinfo_opcache_interned_strings() {
+    local tier
+    tier=$(sysinfo_ram_tier)
+
+    case $tier in
+        1) echo 8 ;;
+        2) echo 12 ;;
+        3) echo 16 ;;
+        4) echo 24 ;;
+        5) echo 32 ;;
+        6) echo 48 ;;
+    esac
+}
+
+# Get recommended opcache.max_accelerated_files
+# THE CONFIGURED VALUE IS ROUNDED UP to the next prime from a fixed table:
+#   1979, 3907, 7963, 16229, 32531, 65407
+# So 10000 and 16229 are the SAME configuration (both -> 16229 slots), and
+# 16230 is the first value that actually buys more. This is the ceiling that
+# binds first in practice: a modern WooCommerce store is large in FILE COUNT,
+# not in megabytes, and every tuning guide reasons in megabytes.
+# Prints: integer value (configured, not rounded)
+sysinfo_opcache_max_files() {
+    local tier
+    tier=$(sysinfo_ram_tier)
+
+    case $tier in
+        1) echo 4000 ;;    # -> 7963 slots
+        2) echo 10000 ;;   # -> 16229 slots (~3 equipped stores)
+        3) echo 10000 ;;   # -> 16229 slots
+        4) echo 10000 ;;   # -> 16229 slots
+        5) echo 16230 ;;   # -> 32531 slots (~6 equipped stores)
+        6) echo 16230 ;;   # -> 32531 slots
+    esac
+}
+
+# Get recommended opcache.huge_code_pages (0 or 1)
+# On a kernel/build without transparent huge page support, PHP emits
+#   "opcache.huge_code_pages has no affect as huge page is not supported"
+# on EVERY process start, flooding the FPM error log. Only enable when the
+# kernel actually advertises [always] or [madvise].
+# Prints: 0 or 1
+sysinfo_opcache_huge_pages() {
+    local thp="/sys/kernel/mm/transparent_hugepage/enabled"
+
+    if [[ -r $thp ]] && grep -qE '\[(always|madvise)\]' "$thp" 2>/dev/null; then
+        echo 1
+    else
+        echo 0
+    fi
+}
+
 # Print a human-readable summary of detected system info and tuning values
 # Used by "check" and "status" commands
 sysinfo_summary() {
@@ -297,5 +391,6 @@ sysinfo_summary() {
     echo "  upstream keepalive: $(sysinfo_keepalive_connections)"
     echo "  php-fpm max_children: $(sysinfo_fpm_max_children) (~$((ram_mb / 2))MB for PHP @ 40MB/worker)"
     echo "  conn limit per IP: $(sysinfo_conn_limit_per_ip), per server: $(sysinfo_conn_limit_per_server)"
+    echo "  opcache: $(sysinfo_opcache_memory)MB buffer, $(sysinfo_opcache_interned_strings)MB strings, $(sysinfo_opcache_max_files) files (shared per FPM pool)"
     echo "  RAM budget: ~50% PHP-FPM, ~20% MySQL, ~15% OS, ~15% nginx/Redis/buffers"
 }
