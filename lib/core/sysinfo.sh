@@ -279,10 +279,34 @@ sysinfo_fpm_max_children() {
 
     local children=$ram_based
     [[ $children -gt $cpu_cap ]] && children=$cpu_cap
+    # NOTE: this floor deliberately OVERRIDES the RAM budget — 1-2 workers is not
+    # a serving config. On a box too small to pay for 3 it over-commits, which is
+    # the honest lesser evil, but the caller must say so. See
+    # sysinfo_fpm_floor_binds().
     [[ $children -lt 3 ]] && children=3
     [[ $children -gt 200 ]] && children=200
 
     echo "$children"
+}
+
+# Does the hard floor of 3 workers override the RAM budget on this box?
+# The floor exists because 1-2 workers is not a serving config, but on a box too
+# small to pay for 3 it silently commits more RAM than the budget allows. Every
+# caller that emits a config must warn rather than pretend the budget held.
+# Returns: 0 if the floor binds (over-committed), 1 if the budget covers it
+sysinfo_fpm_floor_binds() {
+    local afforded
+    afforded=$(( $(sysinfo_ram_budget_php) / SYSINFO_AVG_WORKER_MB ))
+    [[ $afforded -lt 3 ]]
+}
+
+# MB by which the emitted config exceeds the PHP budget (0 when it fits).
+# Prints: integer MB
+sysinfo_fpm_overcommit_mb() {
+    local over
+    over=$(( $(sysinfo_fpm_max_children) * SYSINFO_AVG_WORKER_MB - $(sysinfo_ram_budget_php) ))
+    [[ $over -lt 0 ]] && over=0
+    echo "$over"
 }
 
 # Get recommended per-IP connection limit
@@ -448,4 +472,10 @@ sysinfo_summary() {
     echo "  opcache: $(sysinfo_opcache_memory)MB buffer, $(sysinfo_opcache_interned_strings)MB strings, $(sysinfo_opcache_max_files) files (shared per FPM pool)"
     echo "  RAM budget: ${ram_mb}MB - $(sysinfo_opcache_memory)MB opcache - ${keys_zone_num}MB keys_zone = $(( ram_mb - $(sysinfo_opcache_memory) - keys_zone_num ))MB usable"
     echo "              of that: ~${SYSINFO_PHP_RAM_PCT}% PHP-FPM, ~20% MySQL, ~15% OS, ~15% nginx/Redis/buffers"
+
+    if sysinfo_fpm_floor_binds; then
+        echo "  ⚠ OVER-COMMITTED by $(sysinfo_fpm_overcommit_mb)MB: this box cannot pay for the 3-worker"
+        echo "    minimum. The floor wins so PHP can serve at all, but ${ram_mb}MB is below what a"
+        echo "    WordPress + MySQL stack needs — expect the OOM killer under load."
+    fi
 }

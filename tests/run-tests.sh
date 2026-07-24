@@ -955,6 +955,55 @@ else
     log_fail "max_children exceeds the RAM budget on some tier"
 fi
 
+# The 3-worker floor overrides the budget on boxes too small to pay for it.
+# That is deliberate (1-2 workers is not a serving config) but MUST be reported,
+# not emitted silently — pin both the boundary and the reporting.
+# Boundary: budget must cover 3 x 40MB = 120MB, i.e. usable >= 240MB.
+#   256MB -> usable 182 -> budget 91 -> affords 2  -> floor binds
+#   320MB -> usable 246 -> budget 123 -> affords 3 -> floor does not bind
+sysinfo_simulate 256
+if sysinfo_fpm_floor_binds && [ "$(sysinfo_fpm_overcommit_mb)" -gt 0 ]; then
+    log_pass "Floor-vs-budget collision detected on a 256MB box ($(sysinfo_fpm_overcommit_mb)MB over)"
+else
+    log_fail "256MB box over-commits via the 3-worker floor but is not reported"
+fi
+
+sysinfo_simulate 320
+if sysinfo_fpm_floor_binds || [ "$(sysinfo_fpm_overcommit_mb)" -ne 0 ]; then
+    log_fail "320MB box flagged as over-committed but the budget covers 3 workers"
+else
+    log_pass "Floor-vs-budget collision clears at 320MB (budget affords the floor)"
+fi
+
+# Every tier this tool actually targets must be free of the collision
+floor_ok=true
+for tier_ram in 512 1024 2048 4096 8192 16384; do
+    sysinfo_simulate "$tier_ram"
+    if sysinfo_fpm_floor_binds; then
+        floor_ok=false
+        echo "  ${tier_ram}MB: 3-worker floor overrides the RAM budget"
+    fi
+done
+if [ "$floor_ok" = true ]; then
+    log_pass "No tier from 512MB up hits the floor-vs-budget collision"
+else
+    log_fail "A supported tier over-commits via the worker floor"
+fi
+
+# The warning must reach sysinfo_summary(), not just the helper
+sysinfo_simulate 256
+if printf "%s" "$(sysinfo_summary)" | grep -q "OVER-COMMITTED"; then
+    log_pass "sysinfo_summary warns about the over-commit on a 256MB box"
+else
+    log_fail "sysinfo_summary stayed silent about a 256MB over-commit"
+fi
+sysinfo_simulate 2048
+if printf "%s" "$(sysinfo_summary)" | grep -q "OVER-COMMITTED"; then
+    log_fail "sysinfo_summary cried over-commit on a healthy 2GB box"
+else
+    log_pass "sysinfo_summary silent on a healthy 2GB box"
+fi
+
 # CPU cap still binds on a big-RAM / few-core box
 sysinfo_simulate 16384 2
 if [ "$(sysinfo_fpm_max_children)" = "20" ]; then

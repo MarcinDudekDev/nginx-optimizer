@@ -131,6 +131,13 @@ feature_apply_custom_php_fpm_tuning() {
     cpu_cap=$(( cores * 10 ))
     [[ $cpu_cap -lt 3 ]] && cpu_cap=3
 
+    # The 3-worker floor overrides the budget on boxes too small to pay for it.
+    # Emitting that config silently would be the exact lie this budget work set
+    # out to remove.
+    if sysinfo_fpm_floor_binds && type -t log_warn &>/dev/null; then
+        log_warn "PHP-FPM over-committed by $(sysinfo_fpm_overcommit_mb)MB: ${ram_mb}MB cannot pay for the 3-worker minimum (budget covers ${ram_based}). Applying the floor anyway so PHP can serve — but this box is under-specced for WordPress + MySQL."
+    fi
+
     # Process manager settings (dynamic mode)
     start=$(( max_children / 4 ))
     min=$(( max_children / 8 ))
