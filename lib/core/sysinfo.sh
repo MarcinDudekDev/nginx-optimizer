@@ -5,8 +5,10 @@
 # Cross-platform (macOS + Linux) detection of RAM and CPU for RAM-aware
 # nginx tuning. All functions are pure helpers with no side effects.
 #
-# Inspired by easyinstallvps RAM-tier approach, but applied specifically
-# to nginx tuning parameters.
+# The RAM-tier approach is borrowed, with thanks, from easyinstallvps
+# (https://github.com/sugan0927/easyinstallvps) — tuning a box by bracket
+# rather than by one copy-pasted config is their idea. Applied here
+# specifically to nginx/PHP-FPM tuning parameters. See README "Credits".
 #
 # RAM Tiers:
 #   Tier 1: ≤512MB   (micro VPS, $2.50/mo)
@@ -329,7 +331,12 @@ sysinfo_conn_limit_per_server() {
 #
 # Reference measurements (WP + WooCommerce + 6 popular plugins, PHP 8.5):
 #   ~5,200 hash slots, ~99MB of opcodes, ~22MB of interned strings per store.
-# Source: shift64.com "1,200 Recompiles per Page View" benchmark, July 2026.
+# Source, with thanks — SHIFT64, "1,200 Recompiles per Page View: The OPcache
+# Failure No Hosting Dashboard Will Show You" (2026-07-22):
+# https://shift64.com/blog/opcache-silent-killer-woocommerce-benchmark
+# The measurements below, the "99%+ hit rate while recompiling ~1,200 files per
+# page view" failure mode, and the finding that max_accelerated_files (file
+# count, not megabytes) is the ceiling that binds first are all theirs.
 
 # Get recommended opcache.memory_consumption in MB
 # NOTE: interned_strings_buffer is carved OUT of this value, not added to it.

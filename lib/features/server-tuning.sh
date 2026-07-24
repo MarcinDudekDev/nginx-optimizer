@@ -7,7 +7,7 @@
 # Modifies nginx.conf directly since these directives live in main
 # and events contexts (not in http/conf.d).
 #
-# Inspired by easyinstallvps RAM-tier approach.
+# With thanks to easyinstallvps RAM-tier approach -- https://github.com/sugan0927/easyinstallvps
 ################################################################################
 
 # Ensure registry is loaded

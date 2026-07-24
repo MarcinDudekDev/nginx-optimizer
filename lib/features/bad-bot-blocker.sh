@@ -4,7 +4,7 @@
 ################################################################################
 # Blocks known vulnerability scanners, aggressive crawlers, and scraper bots
 # at the nginx level using a map block. Returns 444 (connection closed).
-# Inspired by easyinstallvps project's DDoS protection approach.
+# With thanks to easyinstallvps project's DDoS protection approach -- https://github.com/sugan0927/easyinstallvps
 ################################################################################
 
 # Ensure registry is loaded

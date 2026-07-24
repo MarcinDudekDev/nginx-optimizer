@@ -4,7 +4,7 @@
 ################################################################################
 # Custom log format with upstream timing metrics for performance analysis.
 # Buffered log writes to reduce disk I/O on high-traffic sites.
-# Inspired by easyinstallvps project's logging approach.
+# With thanks to easyinstallvps project's logging approach -- https://github.com/sugan0927/easyinstallvps
 ################################################################################
 
 # Ensure registry is loaded

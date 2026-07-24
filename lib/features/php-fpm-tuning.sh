@@ -15,7 +15,7 @@
 #   php_ram = usable * 50%   (rest: MySQL ~20%, OS ~15%, nginx/Redis ~15%)
 #   max_children = min(php_ram / avg_worker_size, cores * 10), bounded 3..200
 #
-# Inspired by easyinstallvps RAM-tier approach.
+# With thanks to easyinstallvps RAM-tier approach -- https://github.com/sugan0927/easyinstallvps
 ################################################################################
 
 # Ensure registry is loaded

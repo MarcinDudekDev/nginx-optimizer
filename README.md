@@ -730,6 +730,29 @@ nginx-optimizer v0.10.0-beta
 
 See [ROADMAP.md](ROADMAP.md) and [docs/PRODUCTION-READINESS.md](docs/PRODUCTION-READINESS.md) for full details.
 
+## Credits & Inspiration
+
+This tool stands on other people's measurements. Kudos where it's due:
+
+- **[easyinstallvps](https://github.com/sugan0927/easyinstallvps)** — the RAM-tier
+  approach at the heart of `lib/core/sysinfo.sh`. The idea that a VPS should be
+  tuned by *bracket* rather than by a single copy-pasted config is theirs; the
+  tier ladder, `worker_connections`, `open_file_cache`, log tuning, the bad-bot
+  blocker and the Cloudflare real-IP handling all trace back to that project.
+  Thank you — it turned a pile of one-off snippets into something a 512MB box and
+  a 16GB box can both run safely.
+- **SHIFT64 — ["1,200 Recompiles per Page View: The OPcache Failure No Hosting
+  Dashboard Will Show You"](https://shift64.com/blog/opcache-silent-killer-woocommerce-benchmark)**
+  (2026-07-22) — the benchmark that drove every tier value in
+  `sysinfo_opcache_*()`. Three findings we'd have missed on our own: that a store
+  can sit above a 99% OpCache "hit rate" while silently recompiling ~1,200 PHP
+  files on *every* page view; that hit rate is a vanity metric because OpCache
+  never evicts, it just quietly stops caching once any ceiling is hit; and that
+  `max_accelerated_files` — file count, not megabytes — is the ceiling that
+  actually binds on a plugin-equipped store, which is precisely the number every
+  tuning guide reasons about last. Measured, not guessed, and it cost us a
+  29%-throughput bug we didn't know we had. Kudos.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.

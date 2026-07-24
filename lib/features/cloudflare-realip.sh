@@ -5,7 +5,7 @@
 # Restores visitor real IP when behind Cloudflare proxy.
 # Without this, all requests appear from Cloudflare edge IPs, breaking
 # rate limiting, logging, geo-blocking, and fail2ban.
-# Inspired by easyinstallvps project.
+# With thanks to easyinstallvps project -- https://github.com/sugan0927/easyinstallvps
 ################################################################################
 
 # Ensure registry is loaded
