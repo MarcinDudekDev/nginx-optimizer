@@ -42,7 +42,10 @@ input validation, auto-rollback safety, and pre-flight checks.
 
 ### Testing
 - [ ] Rollback verification (apply -> rollback -> compare)
-- [ ] Real-world config corpus testing (50+ configs)
+- [x] Real-world config corpus testing — 49 valid configs + 3 negative fixtures across
+      10 shape directories, every one validated against real nginx in Docker, with a
+      shape checklist (`tests/configs/SHAPES.md`), a provenance manifest and a
+      near-duplicate assertion (`tests/test-corpus.sh`) so the count cannot be gamed
 - [ ] Nginx version matrix testing (1.18, 1.22, 1.25, 1.27)
 
 ### UX
@@ -60,14 +63,30 @@ input validation, auto-rollback safety, and pre-flight checks.
 
 ### Architecture
 - [ ] **AWK-based config AST parsing** - Analyze before modifying
-- [ ] **Conflict detection** - Warn if directive already exists
-- [ ] **Profile system** - `--profile conservative|balanced|aggressive`
-- [ ] **Server sizing detection** - Auto-adjust values based on RAM/CPU
+- [ ] **Conflict detection** - Warn if directive already exists.
+      *Blocked on the AST parser.* Grep-based conflict detection is exactly how the
+      existing detectors ended up host-scoped rather than file-scoped; doing it
+      again without a parser repeats that mistake.
+- [ ] **Profile system** - `--profile conservative|balanced|aggressive`.
+      Not started (`grep -c profile nginx-optimizer.sh` = 0). Self-contained — no
+      parser dependency, can land independently of the AST work.
+- [x] **Server sizing detection** - Auto-adjust values based on RAM/CPU.
+      **Shipped** as `lib/core/sysinfo.sh`: the RAM-tier ladder driving
+      server-tuning, php-fpm-tuning, opcache, keys_zone and worker_connections,
+      with a shared `sysinfo_ram_budget_php()` so the tiers cannot over-commit.
 
 ### Features
-- [ ] Partial rollback (undo single feature)
+- [ ] Partial rollback (undo single feature).
+      **Partly built, further from done than it looks.** `cmd_remove()` delegates to
+      `feature_remove()`, which only deletes one template file and sed-drops lines
+      naming it. Three holes: no `feature_remove_custom_*` exists anywhere in the
+      tree; multi-template features are unremovable because `FEATURE_TEMPLATE` is a
+      comma-joined string that `feature_remove` never splits (security,
+      fastcgi-cache); template-less features hard-fail (server-tuning,
+      php-fpm-tuning, redis). It also reverses no in-place edits at all.
 - [ ] Config diff visualization
-- [ ] Missing core optimizations (worker_processes, open_file_cache, sendfile, etc.)
+- [x] Missing core optimizations (worker_processes, open_file_cache, sendfile, etc.)
+      — **shipped** as the `server-tuning` and `open-file-cache` features.
 - [x] Early Hints (HTTP 103) forwarding — `early_hints on;` for LCP win on dynamic pages (nginx >= 1.29)
 
 ### Distribution

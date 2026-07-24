@@ -260,14 +260,22 @@ nginx-optimizer/
 └── nginx-optimizer-templates/   # Config templates (20+)
 
 tests/
-├── run-tests.sh                # Unit test suite (70 tests)
+├── run-tests.sh                # Unit test suite
 ├── test-with-nginx.sh          # Docker-based nginx config validation
-└── configs/                    # 12 real-world test configs
-    ├── wordpress/              # WordPress, WooCommerce, SSL
-    ├── reverse-proxy/          # Proxy, load balancer
-    ├── complex/                # Multisite, modular includes
-    ├── edge-cases/             # Already-optimized, comments
-    └── minimal/                # Stock nginx, H5BP baseline
+├── test-corpus.sh              # Corpus shape coverage + near-duplicate assertions
+└── configs/                    # 49 test configs + 3 negative fixtures
+    ├── SHAPES.md               # The shape checklist test-corpus.sh enforces
+    ├── MANIFEST.tsv            # Generated: path, shape, provenance type, source
+    ├── minimal/                # Stock nginx, H5BP baseline, smallest static vhost
+    ├── distro-defaults/        # Debian/Ubuntu, gzip-commented Ubuntu, Alpine
+    ├── panel-generated/        # cPanel EA4 main config + service vhost
+    ├── wordpress/              # Plain, TLS, microcache, WooCommerce, multisite, Bedrock
+    ├── reverse-proxy/          # Keepalive, LB, sticky hash, WebSocket, gRPC, SSE, unix socket
+    ├── app-stacks/             # Laravel, Django/uWSGI, Node, SPA, Next.js
+    ├── tls/                    # Certbot, Cloudflare origin, HTTP/3, mTLS, OCSP stapling
+    ├── complex/                # Multisite maps, modular includes, multi-server API gateway
+    ├── edge-cases/             # Already-optimized, comment-dense, CRLF, nested, duplicate names
+    └── invalid/                # Negative fixtures — these MUST fail `nginx -t`
 
 ~/.nginx-optimizer/              # Data directory
 ├── backups/                    # Timestamped backups
@@ -712,15 +720,21 @@ nginx-optimizer v0.10.0-beta
 - ~~`--no-color` flag for CI environments~~
 - ~~State tracking file (`state.json`) for persistent optimization records~~
 - ~~Full JSON output for `analyze`, `status`, `list`, `check` commands~~
-- ~~12 real-world test configs with Docker-based nginx validation~~
+- ~~Real-world test configs with Docker-based nginx validation~~
 
 ### v0.11.x - Smart Config Parsing
+- ~~Server sizing auto-detection (adjust values based on RAM/CPU)~~ — shipped as
+  `lib/core/sysinfo.sh`; drives server-tuning, php-fpm-tuning, opcache and keys_zone
+- ~~Expand the test corpus~~ — 49 configs + 3 negative fixtures across 10 shape
+  directories, with a shape checklist, provenance manifest and near-duplicate
+  assertion (`tests/configs/SHAPES.md`, `tests/test-corpus.sh`)
 - AWK-based config AST parsing (analyze before modifying)
-- Conflict detection (warn if directive already exists)
-- Profile system (`--profile conservative|balanced|aggressive`)
-- Server sizing auto-detection (adjust values based on RAM/CPU)
-- Partial rollback (undo single feature)
-- Expand test corpus to 50+ configs
+- Conflict detection (warn if directive already exists) — **blocked on the AST parser**
+- Profile system (`--profile conservative|balanced|aggressive`) — not started, and
+  independent of the parser work
+- Partial rollback (undo single feature) — **partly built**: `feature_remove()` deletes
+  one template file and its include line. It cannot remove multi-template features,
+  hard-fails on template-less ones, and reverses no in-place edits. See ROADMAP.md.
 
 ### v1.0.0 - Production Release
 - Python crossplane integration for proper nginx config parsing

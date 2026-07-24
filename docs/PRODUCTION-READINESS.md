@@ -192,7 +192,7 @@ limit_req_zone $binary_remote_addr zone=general:10m rate=15r/s;
 |-----------|--------|----------|
 | Unit tests for each function | Missing | High |
 | Integration tests (full workflow) | Missing | High |
-| Real-world config corpus | Missing | High |
+| Real-world config corpus | **Done** — 49 configs + 3 negative fixtures, 10 shapes, Docker-validated | High |
 | Idempotency tests (run twice) | Missing | Critical |
 | Rollback verification | Missing | Critical |
 | Platform matrix (Ubuntu, Debian, Alpine, macOS) | Missing | High |
@@ -232,7 +232,10 @@ Source configs from:
 - [ ] **`remove` command** - cleanly uninstall optimizations
 - [ ] **`doctor` command** - diagnose common issues
 - [ ] **`export` command** - export current config as template
-- [ ] **Partial rollback** - undo just one feature
+- [ ] **Partial rollback** - undo just one feature. *Partly built:* `feature_remove()` deletes one
+      template file and its include line only. Cannot remove multi-template features (`FEATURE_TEMPLATE`
+      is comma-joined and never split), hard-fails on template-less ones (server-tuning, php-fpm-tuning,
+      redis), and reverses no in-place edits. No `feature_remove_custom_*` exists anywhere in the tree.
 
 ### 4.2 Output/Feedback Issues
 - [ ] No JSON output mode for tooling integration
@@ -376,7 +379,7 @@ Not trying to be a general nginx tool - focus on WordPress where we can excel.
 7. CHANGELOG.md
 
 ### Should Have (v1.0)
-1. Real-world config test corpus
+1. ~~Real-world config test corpus~~ — done, see tests/configs/SHAPES.md
 2. Interactive wizard mode
 3. `--check` dry-run mode
 4. Idempotency guarantee
@@ -502,7 +505,8 @@ After Path B: v1.0.0 (production ready)
 - [x] Fix GNU find: Replace -printf with portable alternatives
 - [x] Fix flock: Replace with portable mkdir-based locking
 - [x] Install shellcheck in CI
-- [x] Create tests/configs/ corpus with 12 real nginx configs
+- [x] Create tests/configs/ corpus — now 49 valid configs + 3 negative fixtures across 10 shape
+      directories, with tests/configs/SHAPES.md as the checklist and tests/test-corpus.sh enforcing it
 - [x] Add test runner script (15 tests passing)
 
 ### Completed - Phase 2 (2025-01-09)
@@ -554,9 +558,9 @@ After Path B: v1.0.0 (production ready)
 2. [ ] APT/RPM packages
 3. [ ] Ansible role/playbook
 4. [ ] Terraform provider
-5. [ ] Config AST parsing (awk-based or crossplane)
+5. [ ] Config AST parsing (awk-based or crossplane)  ← next v0.11.x slice; the corpus above is its test bed
 6. [ ] Profile system (conservative/balanced/aggressive)
-7. [ ] Server sizing auto-detection (RAM/CPU → config values)
+7. [x] Server sizing auto-detection (RAM/CPU → config values) — shipped as lib/core/sysinfo.sh
 ```
 
 ### Known Issues - RESOLVED (2025-01-10)

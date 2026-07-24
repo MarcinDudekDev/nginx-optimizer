@@ -76,6 +76,11 @@ jobs:
       - name: Run test suite
         run: ./tests/run-tests.sh
 
+      # Runs on both OSes: it needs no Docker, and it is also the check that keeps
+      # the corpus honest (shape coverage, no near-duplicates, manifest in sync).
+      - name: Config corpus coverage
+        run: ./tests/test-corpus.sh
+
       - name: Test --version output
         run: |
           version=$(./nginx-optimizer.sh --version 2>&1)
