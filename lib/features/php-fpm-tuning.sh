@@ -7,8 +7,13 @@
 # each PHP worker consumes 30-60MB, and the default max_children is often
 # too high for the available RAM.
 #
-# The math: available_ram_for_php = total_ram * 0.5 (leaving room for
-# nginx, MySQL, Redis, OS). max_children = available / avg_worker_size.
+# The math lives in ONE place — sysinfo_ram_budget_php() / sysinfo_fpm_max_children()
+# in lib/core/sysinfo.sh. This module only reads those values so the two can
+# never drift apart. In outline:
+#   usable  = total_ram - opcache SHM - fastcgi keys_zone   (this tool's own
+#             fixed shared allocations, which no per-worker figure covers)
+#   php_ram = usable * 50%   (rest: MySQL ~20%, OS ~15%, nginx/Redis ~15%)
+#   max_children = min(php_ram / avg_worker_size, cores * 10), bounded 3..200
 #
 # Inspired by easyinstallvps RAM-tier approach.
 ################################################################################
@@ -101,46 +106,30 @@ feature_apply_custom_php_fpm_tuning() {
         return 1
     fi
 
-    # Calculate tuned values
-    local ram_mb max_children start min spare max_spare avg_worker_mb
-    if type -t sysinfo_ram_mb &>/dev/null; then
-        ram_mb=$(sysinfo_ram_mb)
-    else
-        ram_mb=2048
+    # Calculate tuned values — all sizing math is shared, see lib/core/sysinfo.sh
+    local ram_mb cores max_children start min spare max_spare
+    local avg_worker_mb php_ram_mb opcache_mb keys_zone_mb ram_based cpu_cap
+
+    if ! type -t sysinfo_fpm_max_children &>/dev/null; then
+        if type -t log_warn &>/dev/null; then
+            log_warn "sysinfo helpers unavailable — cannot size PHP-FPM safely"
+        fi
+        return 1
     fi
 
-    # Average PHP worker memory: 40MB is a safe estimate for WordPress
-    # (ranges 25-80MB depending on plugins; 40MB is median)
-    avg_worker_mb=40
+    ram_mb=$(sysinfo_ram_mb)
+    cores=$(sysinfo_cpu_cores)
+    avg_worker_mb="${SYSINFO_AVG_WORKER_MB:-40}"
+    max_children=$(sysinfo_fpm_max_children)
 
-    # Budget 50% of RAM for PHP-FPM (rest: OS ~15%, MySQL ~20%, nginx+Redis ~15%)
-    local php_ram_mb=$(( ram_mb / 2 ))
-    local ram_based=$(( php_ram_mb / avg_worker_mb ))
-
-    # CPU core cap: prevent more workers than cores can serve efficiently
-    # WordPress/WooCommerce is mixed CPU + I/O; 10x cores is a practical ceiling
-    local cores cpu_cap
-    if type -t sysinfo_cpu_cores &>/dev/null; then
-        cores=$(sysinfo_cpu_cores)
-    else
-        cores=1
-    fi
+    # Recomputed only to explain the number in the dry-run output
+    php_ram_mb=$(sysinfo_ram_budget_php)
+    opcache_mb=$(sysinfo_opcache_memory)
+    keys_zone_mb=$(sysinfo_fastcgi_keys_zone)
+    keys_zone_mb="${keys_zone_mb%m}"
+    ram_based=$(( php_ram_mb / avg_worker_mb ))
     cpu_cap=$(( cores * 10 ))
     [[ $cpu_cap -lt 3 ]] && cpu_cap=3
-
-    # Use the lower of RAM-based and CPU-based limits
-    if [[ $ram_based -lt $cpu_cap ]]; then
-        max_children=$ram_based
-    else
-        max_children=$cpu_cap
-    fi
-
-    # Sanity bounds
-    if [[ $max_children -lt 3 ]]; then
-        max_children=3
-    elif [[ $max_children -gt 200 ]]; then
-        max_children=200
-    fi
 
     # Process manager settings (dynamic mode)
     start=$(( max_children / 4 ))
@@ -158,7 +147,7 @@ feature_apply_custom_php_fpm_tuning() {
         if type -t ui_step_path &>/dev/null; then
             ui_step_path "Would tune" "$pool_file"
             ui_step_path "  pm" "dynamic"
-            ui_step_path "  pm.max_children" "${max_children} (RAM: ${ram_mb}MB×50%/${avg_worker_mb}MB=${ram_based}, CPU: ${cores}×10=${cpu_cap}, using lower)"
+            ui_step_path "  pm.max_children" "${max_children} (RAM: (${ram_mb}-${opcache_mb} opcache-${keys_zone_mb} zone)×${SYSINFO_PHP_RAM_PCT:-50}%=${php_ram_mb}MB/${avg_worker_mb}MB=${ram_based}, CPU: ${cores}×10=${cpu_cap}, using lower)"
             ui_step_path "  pm.start_servers" "$start"
             ui_step_path "  pm.min_spare_servers" "$min"
             ui_step_path "  pm.max_spare_servers" "$max_spare"
@@ -197,7 +186,7 @@ feature_apply_custom_php_fpm_tuning() {
     rm -f "$temp_file"
 
     if type -t ui_step_path &>/dev/null; then
-        ui_step_path "Tuned PHP-FPM" "max_children=${max_children} (${ram_mb}MB × 50% / ${avg_worker_mb}MB)"
+        ui_step_path "Tuned PHP-FPM" "max_children=${max_children} (${php_ram_mb}MB for PHP / ${avg_worker_mb}MB per worker)"
     fi
 
     # Suggest restart

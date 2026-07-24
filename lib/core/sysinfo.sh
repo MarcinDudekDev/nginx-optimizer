@@ -214,17 +214,64 @@ sysinfo_keepalive_connections() {
     esac
 }
 
+################################################################################
+# Shared RAM Budget
+################################################################################
+# Every feature that sizes itself off "available RAM" must subtract the fixed
+# shared-memory allocations this tool itself provisions, or the box is
+# over-committed: OpCache SHM (64-384MB by tier) and the nginx fastcgi
+# keys_zone (10-256MB by tier) are allocated once at startup and are NOT part
+# of any per-worker figure. Before this helper existed, PHP-FPM budgeted
+# ram_mb/2 with no knowledge of either, which pushed a 512MB VPS to 96%
+# commitment at max_children — i.e. an OOM kill under load.
+
+# Average memory of one PHP-FPM worker running WordPress, in MB.
+# Real range is 25-80MB depending on plugin load; 40MB is the median.
+SYSINFO_AVG_WORKER_MB=40
+
+# Percent of USABLE RAM (total minus this tool's shared allocations) budgeted
+# for PHP-FPM workers. The remainder covers MySQL ~20%, OS ~15%,
+# nginx workers / Redis / buffers ~15%.
+SYSINFO_PHP_RAM_PCT=50
+
+# Get the MB of RAM available to PHP-FPM workers.
+# total RAM - opcache.memory_consumption - fastcgi keys_zone, then the
+# OS/MySQL/Redis reserve is applied to what is left.
+# NOTE: opcache.interned_strings_buffer is carved OUT of memory_consumption,
+# not added to it, so it must not be subtracted a second time here.
+# Prints: integer MB
+sysinfo_ram_budget_php() {
+    local ram_mb opcache_mb keys_zone keys_zone_mb usable
+
+    ram_mb=$(sysinfo_ram_mb)
+    opcache_mb=$(sysinfo_opcache_memory)
+
+    # keys_zone is an nginx size string like "10m" or "256m"
+    keys_zone=$(sysinfo_fastcgi_keys_zone)
+    case "$keys_zone" in
+        *[gG]) keys_zone_mb=$(( ${keys_zone%[gG]} * 1024 )) ;;
+        *[mM]) keys_zone_mb="${keys_zone%[mM]}" ;;
+        *)     keys_zone_mb="$keys_zone" ;;
+    esac
+
+    usable=$(( ram_mb - opcache_mb - keys_zone_mb ))
+
+    # Never return a negative or absurd budget on a tiny/misdetected box
+    [[ $usable -lt 64 ]] && usable=64
+
+    echo $(( usable * SYSINFO_PHP_RAM_PCT / 100 ))
+}
+
 # Get recommended PHP-FPM max_children
 # Uses min(RAM-based, CPU-based) with sanity bounds
-# RAM: 50% of total RAM / 40MB per worker
+# RAM: sysinfo_ram_budget_php() / 40MB per worker
 # CPU: cores × 10 (WordPress/WooCommerce mixed CPU + I/O workload)
 # Prints: integer value
 sysinfo_fpm_max_children() {
-    local ram_mb cores
-    ram_mb=$(sysinfo_ram_mb)
+    local cores php_ram
     cores=$(sysinfo_cpu_cores)
-    local php_ram=$(( ram_mb / 2 ))
-    local ram_based=$(( php_ram / 40 ))
+    php_ram=$(sysinfo_ram_budget_php)
+    local ram_based=$(( php_ram / SYSINFO_AVG_WORKER_MB ))
     local cpu_cap=$(( cores * 10 ))
     [[ $cpu_cap -lt 3 ]] && cpu_cap=3
 
@@ -389,8 +436,9 @@ sysinfo_summary() {
     echo "  fastcgi_cache zone: ${keys_zone} (~${nginx_ram_pct}% of RAM), disk max: $(sysinfo_fastcgi_max_size)"
     echo "  open_file_cache max: $(sysinfo_open_file_cache_max)"
     echo "  upstream keepalive: $(sysinfo_keepalive_connections)"
-    echo "  php-fpm max_children: $(sysinfo_fpm_max_children) (~$((ram_mb / 2))MB for PHP @ 40MB/worker)"
+    echo "  php-fpm max_children: $(sysinfo_fpm_max_children) (~$(sysinfo_ram_budget_php)MB for PHP @ ${SYSINFO_AVG_WORKER_MB}MB/worker)"
     echo "  conn limit per IP: $(sysinfo_conn_limit_per_ip), per server: $(sysinfo_conn_limit_per_server)"
     echo "  opcache: $(sysinfo_opcache_memory)MB buffer, $(sysinfo_opcache_interned_strings)MB strings, $(sysinfo_opcache_max_files) files (shared per FPM pool)"
-    echo "  RAM budget: ~50% PHP-FPM, ~20% MySQL, ~15% OS, ~15% nginx/Redis/buffers"
+    echo "  RAM budget: ${ram_mb}MB - $(sysinfo_opcache_memory)MB opcache - ${keys_zone_num}MB keys_zone = $(( ram_mb - $(sysinfo_opcache_memory) - keys_zone_num ))MB usable"
+    echo "              of that: ~${SYSINFO_PHP_RAM_PCT}% PHP-FPM, ~20% MySQL, ~15% OS, ~15% nginx/Redis/buffers"
 }

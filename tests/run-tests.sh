@@ -859,6 +859,135 @@ fi
 rm -rf "$WP_SCAN_DIR" "$WP_SCAN2_DIR" "$WP_GUARD_DIR"
 
 ################################################################################
+# SECTION 17: Shared RAM Budget (sysinfo)
+################################################################################
+log_section "RAM Budget Tests"
+
+# sysinfo.sh is a pure-helper module: source it directly and drive it by
+# overriding the detection caches (_SYSINFO_RAM_MB / _SYSINFO_CPU_CORES).
+source "${SCRIPT_DIR}/../lib/core/sysinfo.sh"
+
+if ! type -t sysinfo_ram_budget_php &>/dev/null; then
+    log_fail "sysinfo_ram_budget_php function missing"
+fi
+
+# Set the simulated box. Cores fixed at 4 so the RAM path (not the cores*10
+# cap) is what we are testing on the small tiers.
+sysinfo_simulate() {
+    _SYSINFO_RAM_MB="$1"
+    _SYSINFO_CPU_CORES="${2:-4}"
+}
+
+# Expected budget per tier: (RAM - opcache - keys_zone) * 50%
+#   tier ram   opcache keys  usable  budget
+#   1    512   64      10    438     219
+#   2    1024  96      20    908     454
+#   3    2048  160     50    1838    919
+#   4    4096  192     100   3804    1902
+#   5    8192  256     128   7808    3904
+#   6    16384 384     256   15744   7872
+for tier_case in "512:219" "1024:454" "2048:919" "4096:1902" "8192:3904" "16384:7872"; do
+    tier_ram="${tier_case%%:*}"
+    tier_expect="${tier_case##*:}"
+    sysinfo_simulate "$tier_ram"
+    tier_got=$(sysinfo_ram_budget_php)
+    if [ "$tier_got" = "$tier_expect" ]; then
+        log_pass "sysinfo_ram_budget_php(${tier_ram}MB) = ${tier_got}MB"
+    else
+        log_fail "sysinfo_ram_budget_php(${tier_ram}MB) = ${tier_got}MB, expected ${tier_expect}MB"
+    fi
+done
+
+# The budget must ALWAYS be strictly below a flat 50% of total RAM — that is
+# the whole point of subtracting the shared allocations first.
+budget_ok=true
+for tier_ram in 512 1024 2048 4096 8192 16384; do
+    sysinfo_simulate "$tier_ram"
+    if [ "$(sysinfo_ram_budget_php)" -ge $(( tier_ram / 2 )) ]; then
+        budget_ok=false
+        echo "  ${tier_ram}MB budget did not shrink below flat 50%"
+    fi
+done
+if [ "$budget_ok" = true ]; then
+    log_pass "PHP budget is below flat 50% on every tier (shared SHM subtracted)"
+else
+    log_fail "PHP budget still at or above flat 50% on some tier"
+fi
+
+# Total commitment (PHP workers at their ceiling + opcache + keys_zone +
+# MySQL 20% + OS 15% of usable) must leave real headroom on every tier.
+# Before this change tiers 1-3 sat at 93-96%.
+commit_ok=true
+for tier_ram in 512 1024 2048 4096 8192 16384; do
+    sysinfo_simulate "$tier_ram"
+    c_opcache=$(sysinfo_opcache_memory)
+    c_zone=$(sysinfo_fastcgi_keys_zone); c_zone="${c_zone%m}"
+    c_usable=$(( tier_ram - c_opcache - c_zone ))
+    c_php=$(( $(sysinfo_fpm_max_children) * SYSINFO_AVG_WORKER_MB ))
+    c_total=$(( c_php + c_opcache + c_zone + c_usable * 35 / 100 ))
+    c_pct=$(( c_total * 100 / tier_ram ))
+    if [ "$c_pct" -gt 86 ]; then
+        commit_ok=false
+        echo "  ${tier_ram}MB committed at ${c_pct}% (>86%)"
+    fi
+done
+if [ "$commit_ok" = true ]; then
+    log_pass "Total RAM commitment stays under 86% on every tier"
+else
+    log_fail "Total RAM commitment over 86% on some tier"
+fi
+
+# max_children must never exceed what the budget can actually pay for.
+children_ok=true
+for tier_ram in 512 1024 2048 4096 8192 16384; do
+    sysinfo_simulate "$tier_ram"
+    mc=$(sysinfo_fpm_max_children)
+    afford=$(( $(sysinfo_ram_budget_php) / SYSINFO_AVG_WORKER_MB ))
+    # 3 is the hard floor and may legitimately exceed the budget on a tiny box
+    if [ "$mc" -gt "$afford" ] && [ "$mc" -ne 3 ]; then
+        children_ok=false
+        echo "  ${tier_ram}MB: max_children=${mc} > affordable ${afford}"
+    fi
+done
+if [ "$children_ok" = true ]; then
+    log_pass "max_children never exceeds the RAM budget"
+else
+    log_fail "max_children exceeds the RAM budget on some tier"
+fi
+
+# CPU cap still binds on a big-RAM / few-core box
+sysinfo_simulate 16384 2
+if [ "$(sysinfo_fpm_max_children)" = "20" ]; then
+    log_pass "CPU cap binds on 16GB/2-core box (max_children=20)"
+else
+    log_fail "CPU cap broken: 16GB/2-core gave $(sysinfo_fpm_max_children), expected 20"
+fi
+
+# Degenerate box: budget must stay positive and children hit the floor of 3
+sysinfo_simulate 128 1
+if [ "$(sysinfo_ram_budget_php)" -gt 0 ] && [ "$(sysinfo_fpm_max_children)" = "3" ]; then
+    log_pass "Degenerate 128MB box: positive budget, max_children floors at 3"
+else
+    log_fail "Degenerate 128MB box mishandled (budget=$(sysinfo_ram_budget_php), children=$(sysinfo_fpm_max_children))"
+fi
+
+# keys_zone parsing: a "g"-suffixed zone must be read as gigabytes
+sysinfo_fastcgi_keys_zone() { echo "1g"; }
+sysinfo_simulate 8192
+# (8192 - 256 opcache - 1024 zone) * 50% = 3456
+if [ "$(sysinfo_ram_budget_php)" = "3456" ]; then
+    log_pass "keys_zone 'g' suffix parsed as gigabytes"
+else
+    log_fail "keys_zone 'g' suffix mis-parsed (got $(sysinfo_ram_budget_php), expected 3456)"
+fi
+# Restore the real implementation (unset -f would drop it entirely)
+source "${SCRIPT_DIR}/../lib/core/sysinfo.sh"
+
+# Reset caches so nothing downstream inherits a simulated box
+_SYSINFO_RAM_MB=""
+_SYSINFO_CPU_CORES=""
+
+################################################################################
 # Summary
 ################################################################################
 echo ""
