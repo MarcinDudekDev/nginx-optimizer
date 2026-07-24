@@ -1,6 +1,8 @@
 {
   "permissions": {
     "allow": [
+      "Read(/tmp/**)",
+      "Read(/private/tmp/**)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:www.nginx.com)",
       "WebSearch",
@@ -9,7 +11,10 @@
       "Bash(for f in /opt/homebrew/etc/nginx/sites-available/*.conf)",
       "Bash(do sed -i '' 's|/etc/ssl/certs/|/opt/homebrew/etc/nginx/ssl/|g; s|/etc/ssl/private/|/opt/homebrew/etc/nginx/ssl/|g' \"$f\")",
       "Bash(done)",
-      "Bash(./nginx-optimizer.sh:*)"
+      "Bash(./nginx-optimizer.sh:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:makewpfast.com)",
+      "WebFetch(domain:wpmultitool.com)"
     ]
   }
 }
