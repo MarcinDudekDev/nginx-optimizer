@@ -27,3 +27,4 @@ wp-config.php
 
 # Batman working directory
 .batman/
+.claude-handoff.md

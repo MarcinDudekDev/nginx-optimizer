@@ -115,7 +115,25 @@ feature_apply_custom_php_fpm_tuning() {
 
     # Budget 50% of RAM for PHP-FPM (rest: OS ~15%, MySQL ~20%, nginx+Redis ~15%)
     local php_ram_mb=$(( ram_mb / 2 ))
-    max_children=$(( php_ram_mb / avg_worker_mb ))
+    local ram_based=$(( php_ram_mb / avg_worker_mb ))
+
+    # CPU core cap: prevent more workers than cores can serve efficiently
+    # WordPress/WooCommerce is mixed CPU + I/O; 10x cores is a practical ceiling
+    local cores cpu_cap
+    if type -t sysinfo_cpu_cores &>/dev/null; then
+        cores=$(sysinfo_cpu_cores)
+    else
+        cores=1
+    fi
+    cpu_cap=$(( cores * 10 ))
+    [[ $cpu_cap -lt 3 ]] && cpu_cap=3
+
+    # Use the lower of RAM-based and CPU-based limits
+    if [[ $ram_based -lt $cpu_cap ]]; then
+        max_children=$ram_based
+    else
+        max_children=$cpu_cap
+    fi
 
     # Sanity bounds
     if [[ $max_children -lt 3 ]]; then
@@ -140,7 +158,7 @@ feature_apply_custom_php_fpm_tuning() {
         if type -t ui_step_path &>/dev/null; then
             ui_step_path "Would tune" "$pool_file"
             ui_step_path "  pm" "dynamic"
-            ui_step_path "  pm.max_children" "${max_children} (${ram_mb}MB RAM / ${avg_worker_mb}MB per worker × 50%)"
+            ui_step_path "  pm.max_children" "${max_children} (RAM: ${ram_mb}MB×50%/${avg_worker_mb}MB=${ram_based}, CPU: ${cores}×10=${cpu_cap}, using lower)"
             ui_step_path "  pm.start_servers" "$start"
             ui_step_path "  pm.min_spare_servers" "$min"
             ui_step_path "  pm.max_spare_servers" "$max_spare"
