@@ -110,7 +110,7 @@ feature_apply_custom_php_fpm_tuning() {
     local ram_mb cores max_children start min spare max_spare
     local avg_worker_mb php_ram_mb opcache_mb keys_zone_mb ram_based cpu_cap
 
-    if ! type -t sysinfo_fpm_max_children &>/dev/null; then
+    if ! type -t sysinfo_fpm_max_children &>/dev/null || [[ -z "${SYSINFO_AVG_WORKER_MB:-}" ]]; then
         if type -t log_warn &>/dev/null; then
             log_warn "sysinfo helpers unavailable — cannot size PHP-FPM safely"
         fi
@@ -119,7 +119,12 @@ feature_apply_custom_php_fpm_tuning() {
 
     ram_mb=$(sysinfo_ram_mb)
     cores=$(sysinfo_cpu_cores)
-    avg_worker_mb="${SYSINFO_AVG_WORKER_MB:-40}"
+    # Read the shared constant with NO local fallback: a `:-40` default here would
+    # let this module explain the number using a different per-worker figure than
+    # sysinfo_fpm_max_children() actually used — a silent divergence producing a
+    # plausible-looking result. If the constant is missing, the guard above already
+    # bailed.
+    avg_worker_mb="$SYSINFO_AVG_WORKER_MB"
     max_children=$(sysinfo_fpm_max_children)
 
     # Recomputed only to explain the number in the dry-run output

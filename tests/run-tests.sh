@@ -997,11 +997,17 @@ if printf "%s" "$(sysinfo_summary)" | grep -q "OVER-COMMITTED"; then
 else
     log_fail "sysinfo_summary stayed silent about a 256MB over-commit"
 fi
+# Negative assertion — must prove the output EXISTS before proving what it lacks.
+# An empty or errored summary would satisfy "does not contain OVER-COMMITTED"
+# trivially, i.e. a green light for nothing.
 sysinfo_simulate 2048
-if printf "%s" "$(sysinfo_summary)" | grep -q "OVER-COMMITTED"; then
+healthy_summary=$(sysinfo_summary)
+if ! printf "%s" "$healthy_summary" | grep -q "RAM budget:"; then
+    log_fail "sysinfo_summary produced no budget line on 2GB — negative test cannot be trusted"
+elif printf "%s" "$healthy_summary" | grep -q "OVER-COMMITTED"; then
     log_fail "sysinfo_summary cried over-commit on a healthy 2GB box"
 else
-    log_pass "sysinfo_summary silent on a healthy 2GB box"
+    log_pass "sysinfo_summary silent on a healthy 2GB box (output verified non-empty)"
 fi
 
 # CPU cap still binds on a big-RAM / few-core box
