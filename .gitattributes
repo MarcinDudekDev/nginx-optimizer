@@ -1,0 +1,4 @@
+# tests/configs/edge-cases/crlf-line-endings.conf exists precisely to carry CRLF
+# line endings. Git's autocrlf would normalise them to LF on commit, and a fresh
+# clone would get a fixture that no longer tests anything. -text disables that.
+tests/configs/edge-cases/crlf-line-endings.conf -text
