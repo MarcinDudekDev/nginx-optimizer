@@ -92,6 +92,9 @@ feature_apply_custom_redis() {
 
     # wp-test mode (Docker) - use helper if available
     if command -v docker &>/dev/null; then
+        if type -t site_list_begin &>/dev/null; then
+            site_list_begin
+        fi
         if type -t iterate_wptest_sites &>/dev/null; then
             iterate_wptest_sites "_redis_apply_site" "$target_site"
         else
@@ -110,6 +113,9 @@ feature_apply_custom_redis() {
                     done
                 fi
             fi
+        fi
+        if type -t site_list_flush &>/dev/null; then
+            site_list_flush
         fi
     fi
 
@@ -343,7 +349,9 @@ _redis_apply_site() {
     fi
 
     if [ "${DRY_RUN:-false}" = true ]; then
-        if type -t ui_step_path &>/dev/null; then
+        if type -t site_list_step &>/dev/null; then
+            site_list_step "Would add Redis to" "$site"
+        elif type -t ui_step_path &>/dev/null; then
             ui_step_path "Would add Redis to" "$site"
         fi
         return 0
@@ -400,7 +408,9 @@ _redis_append_to_compose() {
       - default
 EOF
 
-    if type -t ui_step_path &>/dev/null; then
+    if type -t site_list_step &>/dev/null; then
+        site_list_step "Added Redis to" "$site"
+    elif type -t ui_step_path &>/dev/null; then
         ui_step_path "Added Redis to" "$site"
     fi
 
