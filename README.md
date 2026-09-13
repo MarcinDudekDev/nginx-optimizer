@@ -733,9 +733,11 @@ nginx-optimizer v0.10.0-beta
 - Conflict detection (warn if directive already exists) — **blocked on the AST parser**
 - Profile system (`--profile conservative|balanced|aggressive`) — not started, and
   independent of the parser work
-- Partial rollback (undo single feature) — **partly built**: `feature_remove()` deletes
-  one template file and its include line. It cannot remove multi-template features,
-  hard-fails on template-less ones, and reverses no in-place edits. See ROADMAP.md.
+- Partial rollback (undo single feature) — **mostly built**: `feature_remove()` splits
+  comma-joined `FEATURE_TEMPLATE` lists and removes every file + include line, and
+  `feature_remove_custom_*` hooks cover the template-less features (server-tuning,
+  php-fpm-tuning, redis). Remaining gap: in-place http3 `listen` edits are not
+  reversed. See ROADMAP.md.
 
 ### v1.0.0 - Production Release
 - Python crossplane integration for proper nginx config parsing

@@ -191,6 +191,129 @@ _redis_system_show_wp_config() {
 }
 
 ################################################################################
+# Custom Remove
+################################################################################
+
+# Remove the Redis pieces feature_apply_custom_redis wrote:
+#   wp-test  — the `redis:` service block in each site's docker-compose.yml and
+#              the redis-<site> container (named via container_name).
+#   system   — left running on purpose: if redis-server was already up when
+#              apply ran it is not ours to stop, and no marker tells the two
+#              apart. Reported instead.
+# Args: $1 = target_site (optional)
+# Returns: 0 on success/dry-run, 1 if nothing was applied
+feature_remove_custom_redis() {
+    local target_site="${1:-}"
+
+    if type -t log_to_file &>/dev/null; then
+        log_to_file "INFO" "Removing Redis Object Cache..."
+    fi
+
+    local removed=false
+    local wp_test_sites="${WP_TEST_SITES:-$HOME/.wp-test/sites}"
+
+    if [ -d "$wp_test_sites" ]; then
+        if [ -n "$target_site" ] && [ -d "$wp_test_sites/$target_site" ]; then
+            _redis_remove_site "$target_site" && removed=true
+        elif [ -z "$target_site" ]; then
+            local site_dir site
+            for site_dir in "$wp_test_sites"/*; do
+                [ -d "$site_dir" ] || continue
+                site=$(basename "$site_dir")
+                _redis_remove_site "$site" && removed=true
+            done
+        fi
+    fi
+
+    if command -v redis-cli &>/dev/null && redis-cli ping &>/dev/null 2>&1; then
+        if [ "${DRY_RUN:-false}" = true ]; then
+            if type -t ui_step &>/dev/null; then
+                ui_step "Would leave system Redis running (may predate this tool)"
+            fi
+        elif type -t log_info &>/dev/null; then
+            log_info "System Redis left running — stop manually if this tool installed it"
+        fi
+    fi
+
+    if [ "${DRY_RUN:-false}" = true ]; then
+        return 0
+    fi
+    [ "$removed" = true ]
+}
+
+# Remove the redis service block from one wp-test site's docker-compose.yml
+# and delete its container.
+# Args: $1 = site name
+# Returns: 0 if the service was present (removed, or would-be in dry-run)
+_redis_remove_site() {
+    local site="$1"
+    local wp_test_sites="${WP_TEST_SITES:-$HOME/.wp-test/sites}"
+    local compose_file="$wp_test_sites/$site/docker-compose.yml"
+
+    [ -f "$compose_file" ] || return 1
+    grep -qE '^[[:space:]]*redis:[[:space:]]*$' "$compose_file" 2>/dev/null || return 1
+
+    if [ "${DRY_RUN:-false}" = true ]; then
+        if type -t ui_step_path &>/dev/null; then
+            ui_step_path "Would remove Redis service from" "$site/docker-compose.yml"
+            ui_step_path "Would remove container" "redis-${site}"
+        fi
+        return 0
+    fi
+
+    # Remove the container this tool added (container_name: redis-<site>)
+    if command -v docker &>/dev/null; then
+        docker rm -f "redis-${site}" >/dev/null 2>&1 || true
+    fi
+
+    cp "$compose_file" "${compose_file}.remove-bak" || return 1
+
+    # Drop the `redis:` service block: every following line indented deeper
+    # than the service key belongs to it.
+    local temp_file
+    temp_file=$(mktemp)
+    awk '
+        /^[[:space:]]*redis:[[:space:]]*$/ {
+            bind = match($0, /[^[:space:]]/) - 1
+            inblock = 1
+            next
+        }
+        inblock {
+            if ($0 ~ /^[[:space:]]*$/) next
+            if (match($0, /[^[:space:]]/) - 1 > bind) next
+            inblock = 0
+        }
+        { print }
+    ' "$compose_file" > "$temp_file"
+
+    # Validate the resulting YAML when docker-compose is available, same as
+    # safe_add_docker_service does on the apply path
+    if command -v docker-compose &>/dev/null; then
+        if ! docker-compose -f "$temp_file" config -q >/dev/null 2>&1; then
+            rm -f "$temp_file"
+            if type -t log_error &>/dev/null; then
+                log_error "Compose validation failed after removing redis — kept ${compose_file}.remove-bak"
+            fi
+            return 1
+        fi
+    fi
+
+    if cp "$temp_file" "$compose_file"; then
+        rm -f "$temp_file" "${compose_file}.remove-bak"
+        if type -t ui_step_path &>/dev/null; then
+            ui_step_path "Removed Redis service from" "$site"
+        fi
+        if type -t log_to_file &>/dev/null; then
+            log_to_file "INFO" "Removed redis service from $site (wp-config.php Redis defines should be removed manually)"
+        fi
+        return 0
+    fi
+
+    rm -f "$temp_file"
+    return 1
+}
+
+################################################################################
 # Helper Functions
 ################################################################################
 

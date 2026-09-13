@@ -394,6 +394,28 @@ feature_remove() {
     fi
 
     local removed=false
+    local tmpl
+
+    # FEATURE_TEMPLATE is comma-joined for multi-template features (security,
+    # fastcgi-cache). Splitting on commas — word-splitting also trims any
+    # whitespace around each name — then run delete + include-strip per file.
+    for tmpl in ${template//,/ }; do
+        _feature_remove_template "$tmpl" && removed=true
+    done
+
+    if [[ "$removed" == "true" ]] || [[ "${DRY_RUN:-false}" == "true" ]]; then
+        return 0
+    fi
+    return 1
+}
+
+# _feature_remove_template - Delete one deployed template file and strip its
+# include directives from site configs and wp-test vhost.d files.
+# Args: $1 = template filename
+# Returns: 0 if anything was removed, 1 otherwise
+_feature_remove_template() {
+    local template="$1"
+    local removed=false
 
     # Escape template name for safe use in sed/grep patterns
     local template_escaped
@@ -435,10 +457,10 @@ feature_remove() {
                     if [[ "${DRY_RUN:-false}" == "true" ]]; then
                         echo "Would remove include from: $(basename "$site_conf")" >&2
                     else
-                        local use_sudo=""
-                        [[ ! -w "$site_conf" ]] && use_sudo="sudo"
-                        $use_sudo sed -i.rmback "/${template_escaped}/d" "$site_conf" 2>/dev/null || \
-                            $use_sudo sed -i '' "/${template_escaped}/d" "$site_conf" 2>/dev/null
+                        local SUDO=""
+                        [[ ! -w "$site_conf" ]] && SUDO="sudo"
+                        $SUDO sed -i.rmback "/${template_escaped}/d" "$site_conf" 2>/dev/null || \
+                            $SUDO sed -i '' "/${template_escaped}/d" "$site_conf" 2>/dev/null
                         rm -f "${site_conf}.rmback" 2>/dev/null
                         removed=true
                     fi
@@ -464,10 +486,7 @@ feature_remove() {
         done
     fi
 
-    if [[ "$removed" == "true" ]] || [[ "${DRY_RUN:-false}" == "true" ]]; then
-        return 0
-    fi
-    return 1
+    [[ "$removed" == "true" ]]
 }
 
 ################################################################################
