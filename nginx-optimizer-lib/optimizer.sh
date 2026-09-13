@@ -101,7 +101,10 @@ get_nginx_sites_dir() {
             return 0
         fi
     done
-    return 1
+    # Empty stdout, exit 0: callers do sites_dir=$(get_nginx_sites_dir) under
+    # set -e. Returning 1 aborted dry-run on CI (no nginx dirs) after the
+    # DRY RUN banner, so "Would apply" never printed (issue #4 / PR #5).
+    return 0
 }
 
 # Get the nginx conf.d directory (cross-platform)
@@ -112,7 +115,7 @@ get_nginx_confd_dir() {
             return 0
         fi
     done
-    return 1
+    return 0
 }
 
 # Get the nginx snippets directory (cross-platform)
@@ -123,7 +126,7 @@ get_nginx_snippets_dir() {
             return 0
         fi
     done
-    return 1
+    return 0
 }
 
 # Get list of system nginx sites (basenames only, cross-platform)
@@ -1002,7 +1005,7 @@ apply_optimizations() {
         # Count system nginx sites (cross-platform)
         local sites_dir
         if type -t get_nginx_sites_dir &>/dev/null; then
-            sites_dir=$(get_nginx_sites_dir)
+            sites_dir=$(get_nginx_sites_dir) || sites_dir=""
         fi
         if [ -n "$sites_dir" ] && [ -d "$sites_dir" ]; then
             local sys_count
