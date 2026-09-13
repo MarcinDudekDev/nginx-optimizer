@@ -56,7 +56,7 @@ input validation, auto-rollback safety, and pre-flight checks.
 - [ ] `--no-color` flag for CI environments
 - [ ] Better progress indicators
 - [x] Full JSON output (not placeholder)
-- [ ] Clean up dry-run output in interactive mode
+- [x] Clean up dry-run output in interactive mode
 
 ### Bug Fixes
 - [x] Review sudo usage (~48 calls, minimize surface) — features and template
