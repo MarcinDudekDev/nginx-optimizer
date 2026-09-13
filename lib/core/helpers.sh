@@ -123,6 +123,43 @@ dry_run_step() {
     fi
 }
 
+# Emit an apply-time diagnostic through the right channel.
+# Interactive dry-run output belongs to the ui_* layer: a raw log_info/log_warn
+# line goes to stdout via tee and leaks "[INFO]"/"[WARN]" into the preview.
+# In non-verbose dry-run the message goes to the log file only -- the caller's
+# ui_step / ui_step_fail line already carries the user-facing signal.
+# Live runs and --verbose keep the original logger output.
+# Args: $1 = level (INFO|WARN|ERROR|SUCCESS), $2.. = message
+# Example: apply_log WARN "Cannot find PHP-FPM pool config (www.conf)"
+apply_log() {
+    local level="${1:-}"
+    [ -z "$level" ] && return 1
+    shift
+
+    if [ "${DRY_RUN:-false}" = true ] && [ "${UI_VERBOSE:-${VERBOSE:-false}}" != true ]; then
+        if type -t log_to_file &>/dev/null; then
+            log_to_file "$level" "$*"
+        fi
+        return 0
+    fi
+
+    case "$level" in
+        WARN)
+            if type -t log_warn &>/dev/null; then log_warn "$*"; fi
+            ;;
+        ERROR)
+            if type -t log_error &>/dev/null; then log_error "$*"; fi
+            ;;
+        SUCCESS)
+            if type -t log_success &>/dev/null; then log_success "$*"; fi
+            ;;
+        *)
+            if type -t log_info &>/dev/null; then log_info "$*"; fi
+            ;;
+    esac
+    return 0
+}
+
 ################################################################################
 # wp-test Site Iteration
 ################################################################################
