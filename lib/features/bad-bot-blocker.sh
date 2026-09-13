@@ -122,8 +122,8 @@ feature_apply_custom_bad_bot_blocker() {
     fi
 
     if [[ -z "${confd_dir:-}" ]]; then
-        if type -t log_warn &>/dev/null; then
-            log_warn "Cannot find nginx conf.d directory"
+        if type -t apply_log &>/dev/null; then
+            apply_log WARN "Cannot find nginx conf.d directory"
         fi
         return 1
     fi
@@ -133,8 +133,8 @@ feature_apply_custom_bad_bot_blocker() {
     local dst="${confd_dir}/bad-bot-blocker.conf"
 
     if [[ ! -f "$src" ]]; then
-        if type -t log_warn &>/dev/null; then
-            log_warn "Bad bot blocker template not found: $src"
+        if type -t apply_log &>/dev/null; then
+            apply_log WARN "Bad bot blocker template not found: $src"
         fi
         return 1
     fi

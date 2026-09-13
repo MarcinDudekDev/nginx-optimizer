@@ -197,8 +197,8 @@ _keepalive_deploy_upstream() {
     fi
 
     if [[ -z "${confd_dir:-}" ]]; then
-        if type -t log_warn &>/dev/null; then
-            log_warn "Cannot find nginx conf.d directory"
+        if type -t apply_log &>/dev/null; then
+            apply_log WARN "Cannot find nginx conf.d directory"
         fi
         return 1
     fi

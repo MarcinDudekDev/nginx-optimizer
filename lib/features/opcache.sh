@@ -111,8 +111,8 @@ feature_apply_custom_opcache() {
 
     # Check if PHP is available
     if ! command -v php &>/dev/null; then
-        if type -t log_warn &>/dev/null; then
-            log_warn "PHP not found in PATH"
+        if type -t apply_log &>/dev/null; then
+            apply_log WARN "PHP not found in PATH"
         fi
         return 1
     fi
@@ -247,8 +247,8 @@ _opcache_deploy_config() {
     php_version=$(php -v 2>/dev/null | head -1 | sed -n 's/^PHP \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')
 
     if [ -z "$php_version" ]; then
-        if type -t log_warn &>/dev/null; then
-            log_warn "Could not determine PHP version"
+        if type -t apply_log &>/dev/null; then
+            apply_log WARN "Could not determine PHP version"
         fi
         return 1
     fi
@@ -290,8 +290,8 @@ _opcache_deploy_config() {
         mkdir -p "$data_dir" 2>/dev/null
         printf '%s\n' "$content" > "${data_dir}/opcache.ini"
 
-        if type -t log_warn &>/dev/null; then
-            log_warn "Could not copy to system PHP config (permissions)"
+        if type -t apply_log &>/dev/null; then
+            apply_log WARN "Could not copy to system PHP config (permissions)"
         fi
         if type -t log_to_file &>/dev/null; then
             log_to_file "INFO" "OpCache config saved to: ${data_dir}/opcache.ini"
