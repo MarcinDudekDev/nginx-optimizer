@@ -1422,6 +1422,136 @@ fi
 rm -rf "$RBX_ROOT"
 
 ################################################################################
+# SECTION 23: JSON Output (--json)
+################################################################################
+log_section "JSON Output Tests"
+
+# Every --json command must print ONLY JSON on stdout (parseable by `jq .`),
+# and the payloads must carry real detection data — not the placeholder stubs
+# from the first --json pass (issue: full JSON output for analyze/status/
+# list/check).
+if command -v jq &>/dev/null; then
+    # --- --json --version ---------------------------------------------------
+    json_out=$("${OPTIMIZER}" --json --version 2>/dev/null || true)
+    if printf '%s' "$json_out" | jq . >/dev/null 2>&1; then
+        log_pass "--json --version emits valid JSON on stdout"
+    else
+        log_fail "--json --version stdout is not valid JSON"
+    fi
+    if printf '%s' "$json_out" | jq -e '.version | type == "string"' >/dev/null 2>&1; then
+        log_pass "--json --version .version is a string"
+    else
+        log_fail "--json --version .version missing or not a string"
+    fi
+
+    # --- list --json --------------------------------------------------------
+    json_out=$("${OPTIMIZER}" list --json 2>/dev/null || true)
+    if printf '%s' "$json_out" | jq . >/dev/null 2>&1; then
+        log_pass "list --json emits valid JSON on stdout"
+    else
+        log_fail "list --json stdout is not valid JSON"
+    fi
+    if printf '%s' "$json_out" | jq -e \
+        '.command == "list" and (.instances | type == "array") and (.features | type == "array")' \
+        >/dev/null 2>&1; then
+        log_pass "list --json has .instances and .features arrays"
+    else
+        log_fail "list --json missing .instances/.features arrays"
+    fi
+    json_inst_count=$(printf '%s' "$json_out" | jq '.instances | length' 2>/dev/null || echo 0)
+    # Instance elements must carry the detected shape
+    if [ "$json_inst_count" -gt 0 ]; then
+        if printf '%s' "$json_out" | jq -e \
+            '[.instances[] | has("type") and has("name") and has("path")] | all' \
+            >/dev/null 2>&1; then
+            log_pass "list --json instances carry {type,name,path}"
+        else
+            log_fail "list --json instances missing {type,name,path} keys"
+        fi
+    fi
+    # Compare against what human `list` actually detects — the JSON path used
+    # to skip detect_nginx_instances entirely and always report zero.
+    human_inst_count=$("${OPTIMIZER}" list 2>/dev/null | grep -cE '[]•*] +\[' || true)
+    if [ "$human_inst_count" -eq 0 ]; then
+        log_skip "list --json instance count (no nginx instances detected on this machine)"
+    elif [ "$json_inst_count" -gt 0 ]; then
+        log_pass "list --json reports $json_inst_count detected instances"
+    else
+        log_fail "list --json reports 0 instances but human list found $human_inst_count"
+    fi
+
+    # --- analyze --json -----------------------------------------------------
+    json_out=$("${OPTIMIZER}" analyze --json 2>/dev/null || true)
+    if printf '%s' "$json_out" | jq . >/dev/null 2>&1; then
+        log_pass "analyze --json emits valid JSON on stdout"
+    else
+        log_fail "analyze --json stdout is not valid JSON"
+    fi
+    if printf '%s' "$json_out" | jq -e \
+        '.command == "analyze" and (.target | type == "string") and (.features | type == "object") and (.features | length > 0)' \
+        >/dev/null 2>&1; then
+        log_pass "analyze --json has .target and a non-empty .features object"
+    else
+        log_fail "analyze --json missing .target or .features"
+    fi
+    # Each feature must carry display + applied + detected; `detected` only
+    # exists if real registry detection ran — it never did on the old stub.
+    if printf '%s' "$json_out" | jq -e \
+        '[.features[] | has("display") and has("applied") and has("detected")] | all' \
+        >/dev/null 2>&1; then
+        log_pass "analyze --json features carry display/applied/detected"
+    else
+        log_fail "analyze --json features missing display/applied/detected keys"
+    fi
+    if printf '%s' "$json_out" | jq -e \
+        '[.features[] | (.applied | type == "boolean") and (.detected | type == "boolean")] | all' \
+        >/dev/null 2>&1; then
+        log_pass "analyze --json applied/detected are booleans"
+    else
+        log_fail "analyze --json applied/detected are not booleans"
+    fi
+
+    # --- status --json ------------------------------------------------------
+    json_out=$("${OPTIMIZER}" status --json 2>/dev/null || true)
+    if printf '%s' "$json_out" | jq . >/dev/null 2>&1; then
+        log_pass "status --json emits valid JSON on stdout"
+    else
+        log_fail "status --json stdout is not valid JSON"
+    fi
+    if printf '%s' "$json_out" | jq -e \
+        '.command == "status" and (.applied | type == "array")' \
+        >/dev/null 2>&1; then
+        log_pass "status --json has .applied array"
+    else
+        log_fail "status --json missing .applied array"
+    fi
+
+    # --- check --json -------------------------------------------------------
+    json_out=$("${OPTIMIZER}" check --json 2>/dev/null || true)
+    if printf '%s' "$json_out" | jq . >/dev/null 2>&1; then
+        log_pass "check --json emits valid JSON on stdout"
+    else
+        log_fail "check --json stdout is not valid JSON"
+    fi
+    if printf '%s' "$json_out" | jq -e \
+        '.command == "check" and (.issues | type == "array") and (.ready | type == "boolean") and (.backup_writable | type == "boolean") and (.nginx_valid | type == "boolean") and (.prerequisites | type == "array") and (.features | type == "array")' \
+        >/dev/null 2>&1; then
+        log_pass "check --json carries issues/ready/backup_writable/nginx_valid/prerequisites/features"
+    else
+        log_fail "check --json missing required keys (issues/ready/backup_writable/nginx_valid)"
+    fi
+    # ready must equal "issues is empty" — the definition, not just nginx -t
+    if printf '%s' "$json_out" | jq -e \
+        '(.ready == true) == ((.issues | length) == 0)' >/dev/null 2>&1; then
+        log_pass "check --json .ready is consistent with .issues"
+    else
+        log_fail "check --json .ready inconsistent with .issues"
+    fi
+else
+    log_skip "jq not installed — JSON output tests"
+fi
+
+################################################################################
 # Summary
 ################################################################################
 echo ""
