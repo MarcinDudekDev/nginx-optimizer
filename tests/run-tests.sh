@@ -560,6 +560,8 @@ else
     log_pass "dry-run section header uses preview wording"
 fi
 
+# Must appear even with no nginx installed (CI). A set -e abort after the
+# DRY RUN banner used to skip the summary entirely (PR #5 / issue #4).
 if echo "$dryrun_output" | grep -qiE "Would apply"; then
     log_pass "dry-run uses 'Would apply' wording"
 else
