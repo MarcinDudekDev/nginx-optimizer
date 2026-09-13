@@ -59,7 +59,11 @@ input validation, auto-rollback safety, and pre-flight checks.
 - [ ] Clean up dry-run output in interactive mode
 
 ### Bug Fixes
-- [ ] Review sudo usage (~48 calls, minimize surface)
+- [x] Review sudo usage (~48 calls, minimize surface) — features and template
+      deployment now go through `smart_copy`/`smart_mkdir`/`smart_write` in
+      `lib/core/helpers.sh` (sudo only when the target isn't writable).
+      honeypot/compiler/warning-fixer/install/backup sudo remains — those
+      targets are genuinely root-owned (issue #14 scope).
 
 ---
 

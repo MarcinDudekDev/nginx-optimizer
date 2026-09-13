@@ -145,11 +145,7 @@ feature_apply_custom_cloudflare_realip() {
         return 0
     fi
 
-    if [[ -w "$confd_dir" ]]; then
-        cp "$src" "$dst"
-    else
-        sudo cp "$src" "$dst"
-    fi
+    smart_copy "$src" "$dst"
 
     if [[ -f "$dst" ]]; then
         if type -t ui_step_path &>/dev/null; then

@@ -269,8 +269,8 @@ _opcache_deploy_config() {
         if [ -d "$php_conf_dir" ]; then
             local dest="${php_conf_dir}/99-opcache-optimized.ini"
 
-            # Try with sudo first
-            if printf '%s\n' "$content" | sudo tee "$dest" >/dev/null 2>&1; then
+            # Write directly when the conf.d dir is writable; elevate only if not
+            if printf '%s\n' "$content" | smart_write "$dest" >/dev/null 2>&1; then
                 if type -t ui_step_path &>/dev/null; then
                     ui_step_path "Configured OpCache" "PHP ${php_version}"
                 fi

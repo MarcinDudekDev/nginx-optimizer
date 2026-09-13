@@ -1588,6 +1588,124 @@ else
 fi
 
 ################################################################################
+# SECTION 25: Sudo Surface (issue #14)
+################################################################################
+log_section "Sudo Surface Tests"
+
+# Feature modules and templates must elevate through the smart_* helpers in
+# lib/core/helpers.sh, which only invoke sudo when the destination is not
+# writable. To prove no unconditional sudo remains, a stub sudo is put on PATH
+# that logs "SUDO_CALLED" and exits 1 — any real sudo invocation both fails
+# and leaves evidence.
+
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/../lib/core/helpers.sh"
+
+SUDO_TEST_DIR=$(mktemp -d)
+SUDO_LOG="${SUDO_TEST_DIR}/sudo.log"
+mkdir -p "${SUDO_TEST_DIR}/bin" "${SUDO_TEST_DIR}/writable"
+cat > "${SUDO_TEST_DIR}/bin/sudo" <<SUDOSTUB
+#!/bin/bash
+echo "SUDO_CALLED" >> "${SUDO_LOG}"
+exit 1
+SUDOSTUB
+chmod +x "${SUDO_TEST_DIR}/bin/sudo"
+echo "config" > "${SUDO_TEST_DIR}/src.conf"
+: > "$SUDO_LOG"
+
+SUDO_PATH_BAK="$PATH"
+PATH="${SUDO_TEST_DIR}/bin:$PATH"
+
+# (a) Writable destination: must succeed without touching sudo at all.
+if smart_copy "${SUDO_TEST_DIR}/src.conf" "${SUDO_TEST_DIR}/writable/dst.conf" 2>/dev/null \
+    && [ -f "${SUDO_TEST_DIR}/writable/dst.conf" ]; then
+    log_pass "smart_copy succeeds on a writable destination"
+else
+    log_fail "smart_copy failed on a writable destination"
+fi
+if grep -q "SUDO_CALLED" "$SUDO_LOG" 2>/dev/null; then
+    log_fail "smart_copy invoked sudo for a writable destination"
+else
+    log_pass "smart_copy never calls sudo when the destination is writable"
+fi
+
+# (b) smart_write on a writable destination: same contract.
+if printf 'ini=yes\n' | smart_write "${SUDO_TEST_DIR}/writable/out.ini" 2>/dev/null \
+    && grep -q "ini=yes" "${SUDO_TEST_DIR}/writable/out.ini"; then
+    log_pass "smart_write succeeds on a writable destination"
+else
+    log_fail "smart_write failed on a writable destination"
+fi
+if grep -q "SUDO_CALLED" "$SUDO_LOG" 2>/dev/null; then
+    log_fail "smart_write invoked sudo for a writable destination"
+else
+    log_pass "smart_write never calls sudo when the destination is writable"
+fi
+
+# (c) smart_mkdir under a writable parent: same contract.
+if smart_mkdir "${SUDO_TEST_DIR}/writable/newdir/sub" 2>/dev/null \
+    && [ -d "${SUDO_TEST_DIR}/writable/newdir/sub" ]; then
+    log_pass "smart_mkdir creates nested dirs under a writable parent"
+else
+    log_fail "smart_mkdir failed under a writable parent"
+fi
+if grep -q "SUDO_CALLED" "$SUDO_LOG" 2>/dev/null; then
+    log_fail "smart_mkdir invoked sudo under a writable parent"
+else
+    log_pass "smart_mkdir never calls sudo under a writable parent"
+fi
+
+# (d) Non-writable destination: must either use sudo or return non-zero.
+#     (Running as root -w is always true, so the distinction is untestable.)
+mkdir -p "${SUDO_TEST_DIR}/nowrite"
+chmod 555 "${SUDO_TEST_DIR}/nowrite"
+: > "$SUDO_LOG"
+if [ "$(id -u)" -eq 0 ]; then
+    log_skip "non-writable destination test (running as root)"
+elif smart_copy "${SUDO_TEST_DIR}/src.conf" "${SUDO_TEST_DIR}/nowrite/dst.conf" 2>/dev/null; then
+    if grep -q "SUDO_CALLED" "$SUDO_LOG" 2>/dev/null; then
+        log_pass "smart_copy escalated to sudo for a non-writable destination"
+    else
+        log_fail "smart_copy wrote to a non-writable destination without sudo"
+    fi
+elif grep -q "SUDO_CALLED" "$SUDO_LOG" 2>/dev/null; then
+    log_pass "smart_copy attempted sudo for a non-writable destination (stub denied it)"
+else
+    log_pass "smart_copy returned non-zero for a non-writable destination"
+fi
+chmod 755 "${SUDO_TEST_DIR}/nowrite"
+
+PATH="$SUDO_PATH_BAK"
+rm -rf "$SUDO_TEST_DIR"
+
+# (e) No bare 'sudo cp|tee|mkdir' may remain in feature modules or templates.
+#     Comments and user-facing hint strings are stripped before scanning, so a
+#     line that merely mentions sudo stays legal. The writable-check pattern
+#     ($SUDO cp) is allowed by the issue and does not match this pattern.
+bare_sudo_hits=""
+for sudo_scan_file in "${SCRIPT_DIR}"/../lib/features/*.sh "${SCRIPT_DIR}/../lib/core/templates.sh"; do
+    scan_hits=$(sed -e 's/"[^"]*"//g' -e "s/'[^']*'//g" -e 's/^[[:space:]]*#.*$//' -e 's/[[:space:]]#.*$//' \
+        "$sudo_scan_file" | grep -nE 'sudo[[:space:]]+(cp|tee|mkdir)' || true)
+    if [ -n "$scan_hits" ]; then
+        bare_sudo_hits="${bare_sudo_hits}${sudo_scan_file}: ${scan_hits} "
+    fi
+done
+if [ -z "$bare_sudo_hits" ]; then
+    log_pass "No bare sudo cp/tee/mkdir in lib/features or lib/core/templates.sh"
+else
+    log_fail "Bare sudo file ops remain: $bare_sudo_hits"
+fi
+
+# (f) The helpers must exist (this section fails on a helpers.sh without them).
+for helper_fn in smart_copy smart_mkdir smart_write; do
+    if type -t "$helper_fn" &>/dev/null; then
+        log_pass "$helper_fn helper exists"
+    else
+        log_fail "$helper_fn helper missing from lib/core/helpers.sh"
+    fi
+done
+
+################################################################################
 # Summary
 ################################################################################
 echo ""

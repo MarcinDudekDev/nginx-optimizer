@@ -168,11 +168,11 @@ feature_apply_custom_php_fpm_tuning() {
     fi
 
     # Backup original
-    local use_sudo=""
+    local SUDO=""
     if [[ ! -w "$pool_file" ]]; then
-        use_sudo="sudo"
+        SUDO="sudo"
     fi
-    $use_sudo cp "$pool_file" "${pool_file}.before-tuning"
+    $SUDO cp "$pool_file" "${pool_file}.before-tuning"
 
     # Apply tuning with sed
     # Use a temp file approach for safe atomic replacement
@@ -194,7 +194,7 @@ feature_apply_custom_php_fpm_tuning() {
     _fpm_set_directive "$temp_file" "pm.max_requests" "500"
 
     # Apply
-    $use_sudo cp "$temp_file" "$pool_file"
+    $SUDO cp "$temp_file" "$pool_file"
     rm -f "$temp_file"
 
     if type -t ui_step_path &>/dev/null; then

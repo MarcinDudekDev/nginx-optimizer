@@ -39,10 +39,55 @@ smart_copy() {
 
     dst_dir=$(dirname "$dst")
 
-    if [ -w "$dst_dir" ]; then
+    # Overwriting an existing writable file needs no dir write permission
+    if [ -w "$dst_dir" ] || [ -w "$dst" ]; then
         cp "$src" "$dst"
     else
         sudo cp "$src" "$dst"
+    fi
+}
+
+# Create a directory tree with automatic sudo handling
+# Walks up to the nearest existing ancestor to test writability and uses
+# sudo only when that ancestor is not writable
+# Args: $1 = directory path
+# Returns: 0 on success, 1 on failure
+smart_mkdir() {
+    local dir="$1"
+    local parent
+
+    [ -z "$dir" ] && return 1
+    [ -d "$dir" ] && return 0
+
+    parent="$dir"
+    while [ ! -e "$parent" ]; do
+        parent=$(dirname "$parent")
+    done
+
+    if [ -w "$parent" ]; then
+        mkdir -p "$dir"
+    else
+        sudo mkdir -p "$dir"
+    fi
+}
+
+# Write stdin to a file with automatic sudo handling
+# Replaces the 'sudo tee' pattern: writes directly when the destination
+# file or its directory is writable, elevates only otherwise
+# Args: $1 = destination path
+# Returns: 0 on success, 1 on failure
+smart_write() {
+    local dst="$1"
+    local dst_dir
+
+    [ -z "$dst" ] && return 1
+
+    dst_dir=$(dirname "$dst")
+
+    if [ -w "$dst_dir" ] || [ -w "$dst" ]; then
+        cat > "$dst"
+    else
+        sudo tee "$dst" > /dev/null
     fi
 }
 
