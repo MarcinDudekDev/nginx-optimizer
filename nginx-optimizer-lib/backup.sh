@@ -332,7 +332,10 @@ restore_backup() {
     fi
 
     # Verify restored files match backup checksums
-    verify_restored_files "$backup_path"
+    if ! verify_restored_files "$backup_path"; then
+        log_error "Rollback verification FAILED - restored files do not match the backup"
+        return 1
+    fi
 
     # Clear state file since rollback restores previous config
     if type -t clear_state_for_rollback &>/dev/null; then
@@ -451,10 +454,16 @@ verify_restored_files() {
     [ -d "$backup_path/nginx-homebrew-arm" ] && dir_pairs+=("$backup_path/nginx-homebrew-arm|/opt/homebrew/etc/nginx")
     [ -d "$backup_path/wp-test-nginx" ] && dir_pairs+=("$backup_path/wp-test-nginx|$HOME/.wp-test/nginx")
 
+    if [ ${#dir_pairs[@]} -gt 0 ]; then
     for pair in "${dir_pairs[@]}"; do
         local bak_dir="${pair%%|*}"
         local cur_dir="${pair##*|}"
-        [ -d "$cur_dir" ] || continue
+
+        if [ ! -d "$cur_dir" ]; then
+            log_warn "Destination directory missing after restore: $cur_dir"
+            mismatched=$((mismatched + 1))
+            continue
+        fi
 
         while IFS= read -r -d '' bak_file; do
             local rel_path="${bak_file#$bak_dir/}"
@@ -478,21 +487,25 @@ verify_restored_files() {
             fi
         done < <(find "$bak_dir" -type f -print0 2>/dev/null)
     done
-
-    if [ "$mismatched" -eq 0 ]; then
-        log_success "Verification passed: $verified files match backup"
-    else
-        log_warn "Verification: $verified matched, $mismatched mismatched"
     fi
 
-    # Validate nginx config after restore
+    # Validate nginx config after restore (skipped entirely when nginx absent)
     if command -v nginx &>/dev/null; then
         if nginx -t 2>/dev/null; then
             log_success "nginx -t validation passed after restore"
         else
             log_error "nginx -t validation FAILED after restore"
+            mismatched=$((mismatched + 1))
         fi
     fi
+
+    if [ "$mismatched" -eq 0 ]; then
+        log_success "Verification passed: $verified files match backup"
+        return 0
+    fi
+
+    log_error "Verification FAILED: $verified matched, $mismatched mismatched/missing"
+    return 1
 }
 
 cleanup_old_backups() {
