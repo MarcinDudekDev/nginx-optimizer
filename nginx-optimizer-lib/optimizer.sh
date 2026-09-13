@@ -1043,13 +1043,23 @@ apply_optimizations() {
 
     # Show features section header
     if type -t ui_section &>/dev/null; then
-        if [ -n "$specific_feature" ]; then
+        if [ "$DRY_RUN" = true ]; then
+            if [ -n "$specific_feature" ]; then
+                ui_section "Previewing $(get_feature_display_name "$specific_feature")..."
+            else
+                ui_section "Previewing optimizations..."
+            fi
+        elif [ -n "$specific_feature" ]; then
             ui_section "Applying $(get_feature_display_name "$specific_feature")..."
         else
             ui_section "Applying optimizations..."
         fi
     else
-        log_info "Applying optimizations..."
+        if [ "$DRY_RUN" = true ]; then
+            echo "Previewing optimizations..."
+        else
+            log_info "Applying optimizations..."
+        fi
         echo ""
     fi
 
@@ -1099,7 +1109,13 @@ apply_optimizations() {
         [ -z "$display_name" ] && display_name="$feature_id"
 
         # Show progress
-        if type -t ui_step &>/dev/null; then
+        if [ "$DRY_RUN" = true ]; then
+            if type -t ui_step_pending &>/dev/null; then
+                ui_step_pending "Previewing $display_name..."
+            else
+                echo "  Previewing $display_name..."
+            fi
+        elif type -t ui_step &>/dev/null; then
             ui_step "Applying $display_name..."
         else
             log_info "Applying $display_name..."
@@ -1114,13 +1130,25 @@ apply_optimizations() {
                 backup_ts=$(basename "$CURRENT_BACKUP_DIR")
             fi
             save_applied_state "$feature_id" "${target_site:-all}" "$backup_ts"
-            if type -t ui_step &>/dev/null; then
+            if [ "$DRY_RUN" = true ]; then
+                if type -t ui_step &>/dev/null; then
+                    ui_step "Would apply $display_name"
+                else
+                    echo "  Would apply $display_name"
+                fi
+            elif type -t ui_step &>/dev/null; then
                 ui_step "$display_name applied"
             else
                 log_success "$display_name applied"
             fi
         else
-            if type -t ui_step_fail &>/dev/null; then
+            if [ "$DRY_RUN" = true ]; then
+                if type -t ui_step_fail &>/dev/null; then
+                    ui_step_fail "$display_name" "skipped"
+                else
+                    echo "  Skipped $display_name (cannot preview)"
+                fi
+            elif type -t ui_step_fail &>/dev/null; then
                 ui_step_fail "$display_name" "failed"
             else
                 log_warn "Failed to apply $display_name"
@@ -1141,7 +1169,35 @@ apply_optimizations() {
 
     ui_blank
 
-    if [ "$applied_count" -gt 0 ] && type -t ui_success_box &>/dev/null; then
+    if [ "$DRY_RUN" = true ] && type -t ui_success_box &>/dev/null; then
+        # Preview summary -- conditional wording, nothing was applied
+        local summary_lines=()
+        if [ "$applied_count" -gt 0 ]; then
+            summary_lines+=("Would apply ${applied_count} optimization(s):")
+            for opt in "${APPLIED_OPTIMIZATIONS[@]}"; do
+                summary_lines+=("  ${UI_BULLET:-•} $opt")
+            done
+        else
+            summary_lines+=("Would apply 0 optimization(s)")
+        fi
+        summary_lines+=("")
+        # Shorten log path for display
+        local short_log="${LOG_FILE/#$HOME/~}"
+        summary_lines+=("Log: ${short_log}")
+
+        ui_success_box "Dry run complete" "${summary_lines[@]}"
+    elif [ "$DRY_RUN" = true ]; then
+        echo "Would apply ${applied_count} optimization(s)"
+
+        if [ "$applied_count" -gt 0 ]; then
+            echo ""
+            echo "Would-Apply Optimizations:"
+            for opt in "${APPLIED_OPTIMIZATIONS[@]}"; do
+                echo "  - $opt"
+            done
+        fi
+        echo ""
+    elif [ "$applied_count" -gt 0 ] && type -t ui_success_box &>/dev/null; then
         # Build summary lines
         local summary_lines=()
         summary_lines+=("Applied ${applied_count} optimization(s):")

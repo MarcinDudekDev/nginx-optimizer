@@ -121,8 +121,8 @@ feature_apply_custom_cloudflare_realip() {
     fi
 
     if [[ -z "${confd_dir:-}" ]]; then
-        if type -t log_warn &>/dev/null; then
-            log_warn "Cannot find nginx conf.d directory"
+        if type -t apply_log &>/dev/null; then
+            apply_log WARN "Cannot find nginx conf.d directory"
         fi
         return 1
     fi
@@ -132,8 +132,8 @@ feature_apply_custom_cloudflare_realip() {
     local dst="${confd_dir}/cloudflare-realip.conf"
 
     if [[ ! -f "$src" ]]; then
-        if type -t log_warn &>/dev/null; then
-            log_warn "Cloudflare real IP template not found: $src"
+        if type -t apply_log &>/dev/null; then
+            apply_log WARN "Cloudflare real IP template not found: $src"
         fi
         return 1
     fi

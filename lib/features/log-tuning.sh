@@ -123,8 +123,8 @@ feature_apply_custom_log_tuning() {
     # Deploy to conf.d
     if type -t deploy_template_to_confd &>/dev/null; then
         if deploy_template_to_confd "log-tuning.conf"; then
-            if type -t log_info &>/dev/null; then
-                log_info "To use: access_log /var/log/nginx/access.log timed buffer=32k flush=5s;"
+            if type -t apply_log &>/dev/null; then
+                apply_log INFO "To use: access_log /var/log/nginx/access.log timed buffer=32k flush=5s;"
             fi
             return 0
         fi
@@ -141,8 +141,8 @@ feature_apply_custom_log_tuning() {
     fi
 
     if [[ -z "${confd_dir:-}" ]]; then
-        if type -t log_warn &>/dev/null; then
-            log_warn "Cannot find nginx conf.d directory"
+        if type -t apply_log &>/dev/null; then
+            apply_log WARN "Cannot find nginx conf.d directory"
         fi
         return 1
     fi
@@ -152,8 +152,8 @@ feature_apply_custom_log_tuning() {
     local dst="${confd_dir}/log-tuning.conf"
 
     if [[ ! -f "$src" ]]; then
-        if type -t log_warn &>/dev/null; then
-            log_warn "Log tuning template not found: $src"
+        if type -t apply_log &>/dev/null; then
+            apply_log WARN "Log tuning template not found: $src"
         fi
         return 1
     fi
@@ -171,8 +171,8 @@ feature_apply_custom_log_tuning() {
         if type -t ui_step_path &>/dev/null; then
             ui_step_path "Deployed" "conf.d/log-tuning.conf"
         fi
-        if type -t log_info &>/dev/null; then
-            log_info "To use: access_log /var/log/nginx/access.log timed buffer=32k flush=5s;"
+        if type -t apply_log &>/dev/null; then
+            apply_log INFO "To use: access_log /var/log/nginx/access.log timed buffer=32k flush=5s;"
         fi
         return 0
     fi

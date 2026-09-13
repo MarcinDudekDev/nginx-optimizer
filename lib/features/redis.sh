@@ -168,8 +168,8 @@ _redis_apply_system() {
         sudo systemctl enable redis-server 2>/dev/null
         sudo systemctl start redis-server 2>/dev/null
     else
-        if type -t log_warn &>/dev/null; then
-            log_warn "Cannot auto-install Redis. Please install manually."
+        if type -t apply_log &>/dev/null; then
+            apply_log WARN "Cannot auto-install Redis. Please install manually."
         fi
         return 1
     fi
@@ -324,8 +324,8 @@ _redis_apply_site() {
     local compose_file="$wp_test_sites/$site/docker-compose.yml"
 
     if [ ! -f "$compose_file" ]; then
-        if type -t log_warn &>/dev/null; then
-            log_warn "docker-compose.yml not found for $site"
+        if type -t apply_log &>/dev/null; then
+            apply_log WARN "docker-compose.yml not found for $site"
         fi
         return 1
     fi
@@ -362,8 +362,8 @@ _redis_apply_site() {
             _redis_show_next_steps "$site"
             return 0
         else
-            if type -t log_error &>/dev/null; then
-                log_error "Failed to add Redis service to docker-compose.yml"
+            if type -t apply_log &>/dev/null; then
+                apply_log ERROR "Failed to add Redis service to docker-compose.yml"
             fi
             return 1
         fi
@@ -383,8 +383,8 @@ _redis_append_to_compose() {
 
     # Check if file has services: section
     if ! grep -q "^services:" "$compose_file"; then
-        if type -t log_error &>/dev/null; then
-            log_error "Invalid docker-compose.yml format (no services section)"
+        if type -t apply_log &>/dev/null; then
+            apply_log ERROR "Invalid docker-compose.yml format (no services section)"
         fi
         return 1
     fi

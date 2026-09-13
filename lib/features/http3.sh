@@ -56,8 +56,8 @@ feature_apply_custom_http3() {
 
         # Compare versions (1.25 minimum for HTTP/3)
         if ! _version_gte "$version" "1.25"; then
-            if type -t log_warn &>/dev/null; then
-                log_warn "HTTP/3 requires nginx >= 1.25.0 (current: $version)"
+            if type -t apply_log &>/dev/null; then
+                apply_log WARN "HTTP/3 requires nginx >= 1.25.0 (current: $version)"
             fi
             return 1
         fi
@@ -278,8 +278,8 @@ EOF
 
     # Note about local dev
     if [[ "$site" =~ \.(loc|local|test|localhost)$ ]]; then
-        if type -t log_info &>/dev/null; then
-            log_info "Note: HTTP/3 requires valid SSL cert (will use HTTP/2 locally)"
+        if type -t apply_log &>/dev/null; then
+            apply_log INFO "Note: HTTP/3 requires valid SSL cert (will use HTTP/2 locally)"
         fi
     fi
 }

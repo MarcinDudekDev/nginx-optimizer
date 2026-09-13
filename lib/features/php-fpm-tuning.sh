@@ -89,8 +89,8 @@ feature_apply_custom_php_fpm_tuning() {
 
     # Check if PHP-FPM is available
     if ! command -v php &>/dev/null; then
-        if type -t log_warn &>/dev/null; then
-            log_warn "PHP not found — skipping FPM tuning"
+        if type -t apply_log &>/dev/null; then
+            apply_log WARN "PHP not found — skipping FPM tuning"
         fi
         return 1
     fi
@@ -100,8 +100,8 @@ feature_apply_custom_php_fpm_tuning() {
     pool_file=$(_fpm_find_pool_config)
 
     if [[ -z "$pool_file" ]]; then
-        if type -t log_warn &>/dev/null; then
-            log_warn "Cannot find PHP-FPM pool config (www.conf)"
+        if type -t apply_log &>/dev/null; then
+            apply_log WARN "Cannot find PHP-FPM pool config (www.conf)"
         fi
         return 1
     fi
@@ -111,8 +111,8 @@ feature_apply_custom_php_fpm_tuning() {
     local avg_worker_mb php_ram_mb opcache_mb keys_zone_mb ram_based cpu_cap
 
     if ! type -t sysinfo_fpm_max_children &>/dev/null || [[ -z "${SYSINFO_AVG_WORKER_MB:-}" ]]; then
-        if type -t log_warn &>/dev/null; then
-            log_warn "sysinfo helpers unavailable — cannot size PHP-FPM safely"
+        if type -t apply_log &>/dev/null; then
+            apply_log WARN "sysinfo helpers unavailable — cannot size PHP-FPM safely"
         fi
         return 1
     fi
@@ -139,8 +139,8 @@ feature_apply_custom_php_fpm_tuning() {
     # The 3-worker floor overrides the budget on boxes too small to pay for it.
     # Emitting that config silently would be the exact lie this budget work set
     # out to remove.
-    if sysinfo_fpm_floor_binds && type -t log_warn &>/dev/null; then
-        log_warn "PHP-FPM over-committed by $(sysinfo_fpm_overcommit_mb)MB: ${ram_mb}MB cannot pay for the 3-worker minimum (budget covers ${ram_based}). Applying the floor anyway so PHP can serve — but this box is under-specced for WordPress + MySQL."
+    if sysinfo_fpm_floor_binds && type -t apply_log &>/dev/null; then
+        apply_log WARN "PHP-FPM over-committed by $(sysinfo_fpm_overcommit_mb)MB: ${ram_mb}MB cannot pay for the 3-worker minimum (budget covers ${ram_based}). Applying the floor anyway so PHP can serve — but this box is under-specced for WordPress + MySQL."
     fi
 
     # Process manager settings (dynamic mode)
@@ -202,8 +202,8 @@ feature_apply_custom_php_fpm_tuning() {
     fi
 
     # Suggest restart
-    if type -t log_info &>/dev/null; then
-        log_info "Restart PHP-FPM to apply: sudo systemctl reload php*-fpm"
+    if type -t apply_log &>/dev/null; then
+        apply_log INFO "Restart PHP-FPM to apply: sudo systemctl reload php*-fpm"
     fi
 
     if type -t log_to_file &>/dev/null; then

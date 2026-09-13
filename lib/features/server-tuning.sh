@@ -126,8 +126,8 @@ feature_apply_custom_server_tuning() {
     fi
 
     if [[ -z "$nginx_conf" ]] || [[ ! -f "$nginx_conf" ]]; then
-        if type -t log_warn &>/dev/null; then
-            log_warn "Cannot find nginx.conf — skipping server tuning"
+        if type -t apply_log &>/dev/null; then
+            apply_log WARN "Cannot find nginx.conf — skipping server tuning"
         fi
         return 1
     fi
@@ -227,8 +227,8 @@ feature_apply_custom_server_tuning() {
         if ! nginx -t 2>&1 | grep -q "test is successful\|syntax is ok"; then
             # Rollback on failure
             $SUDO mv "${nginx_conf}.tuning-bak" "$nginx_conf"
-            if type -t log_warn &>/dev/null; then
-                log_warn "nginx -t failed after tuning, rolled back"
+            if type -t apply_log &>/dev/null; then
+                apply_log WARN "nginx -t failed after tuning, rolled back"
             fi
             return 1
         fi
