@@ -161,6 +161,71 @@ apply_log() {
 }
 
 ################################################################################
+# Per-Site Output Collapsing
+################################################################################
+
+# Past this many sites, one "<text> -> N sites" summary replaces per-site lines.
+SITE_LIST_COLLAPSE_MAX=5
+
+# Buffered "text|site" lines for the list currently being built.
+declare -a _SITE_LIST_ITEMS=()
+_SITE_LIST_ACTIVE=false
+
+# Start buffering a per-site list. Call before iterating sites that each
+# report one ui_step_path line; pair with site_list_flush.
+site_list_begin() {
+    _SITE_LIST_ITEMS=()
+    _SITE_LIST_ACTIVE=true
+}
+
+# Buffer one per-site line. When no list is active, prints immediately so
+# unwrapped call sites keep working.
+# Args: $1 = text ("Would configure HTTP/3"), $2 = site/conf name
+site_list_step() {
+    local text="$1"
+    local site="$2"
+
+    if [ "$_SITE_LIST_ACTIVE" = true ]; then
+        _SITE_LIST_ITEMS+=("${text}|${site}")
+        return 0
+    fi
+    if type -t ui_step_path &>/dev/null; then
+        ui_step_path "$text" "$site"
+    fi
+}
+
+# Emit the buffered list: per-site lines when the count is
+# <= SITE_LIST_COLLAPSE_MAX or --verbose is set, otherwise one
+# "<text> -> N sites" summary line.
+# Args: $1 = summary text (optional; defaults to the first buffered text)
+site_list_flush() {
+    local count=${#_SITE_LIST_ITEMS[@]}
+    local summary_text="${1:-}"
+    if [ -z "$summary_text" ] && [ "$count" -gt 0 ]; then
+        summary_text="${_SITE_LIST_ITEMS[0]%%|*}"
+    fi
+
+    if [ "$count" -gt "$SITE_LIST_COLLAPSE_MAX" ] && [ "${UI_VERBOSE:-false}" != true ]; then
+        if type -t ui_step_path &>/dev/null; then
+            ui_step_path "$summary_text" "$count sites"
+        fi
+    else
+        # Index loop: "${arr[@]}" on an empty array is an unbound-variable
+        # error under set -u on bash 3.2.
+        local i
+        for ((i=0; i<count; i++)); do
+            local item="${_SITE_LIST_ITEMS[$i]}"
+            if type -t ui_step_path &>/dev/null; then
+                ui_step_path "${item%%|*}" "${item#*|}"
+            fi
+        done
+    fi
+
+    _SITE_LIST_ITEMS=()
+    _SITE_LIST_ACTIVE=false
+}
+
+################################################################################
 # wp-test Site Iteration
 ################################################################################
 

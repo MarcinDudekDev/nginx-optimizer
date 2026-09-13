@@ -1874,6 +1874,77 @@ done
 rm -rf "$REMOVE_FAKE_HOME"
 
 ################################################################################
+# SECTION 27: Progress indicators (issue #8)
+################################################################################
+log_section "Progress Indicators"
+
+# A feature that is still running must not look finished: the in-progress line
+# uses the pending marker (○) with an i/n counter, and the completed
+# checkmark (✓ / *) is reserved for the result line.
+prog_output=$("${OPTIMIZER}" optimize --dry-run --no-color --force 2>&1 || true)
+
+if printf '%s' "$prog_output" | grep -qE '(✓|\*)[[:space:]]+Applying .*\.\.\.'; then
+    log_fail "In-progress 'Applying ...' line still uses the completed-check marker"
+elif printf '%s' "$prog_output" | grep -qE '○[[:space:]]+Applying .*\.\.\.'; then
+    log_pass "In-progress 'Applying ...' line uses the pending marker"
+else
+    log_fail "No in-progress 'Applying ...' line found in dry-run output"
+fi
+
+if printf '%s' "$prog_output" | grep -qE 'Applying .*\.\.\..*\[?1/[0-9]+'; then
+    log_pass "In-progress line carries an i/n counter starting at 1"
+else
+    log_fail "No i/n counter on in-progress feature lines"
+fi
+
+# The counter's denominator must equal the number of feature result lines in
+# the same run (not a hard-coded feature count). Result-line vocabulary differs
+# by mode: dry-run prints "✓ Would apply X" / "✗ X (skipped)", a real run
+# prints "✓ X applied" / "✗ X (failed)".
+prog_denom=$(printf '%s' "$prog_output" | grep 'Applying ' | grep -oE '[0-9]+/[0-9]+' | head -1 | cut -d/ -f2 || true)
+prog_results=$(printf '%s' "$prog_output" | grep -cE '(✓|\*)[[:space:]]+Would apply |[[:space:]](applied|\(failed\)|\(skipped\))$' || true)
+if [ -n "$prog_denom" ] && [ "$prog_denom" = "$prog_results" ]; then
+    log_pass "Counter denominator ($prog_denom) equals feature result lines ($prog_results)"
+else
+    log_fail "Counter denominator '${prog_denom:-none}' != $prog_results feature result lines"
+fi
+
+# Per-site collapse: with more than 5 sites, a run prints one
+# "... -> N sites" count line instead of one line per site.
+site_found=$(printf '%s' "$prog_output" | sed -n 's/.*(\([0-9][0-9]*\) found).*/\1/p' | head -1)
+if [ -z "$site_found" ] || [ "$site_found" -le 5 ]; then
+    log_skip "Per-site collapse tests need >5 detected sites (found: ${site_found:-0})"
+else
+    http3_output=$("${OPTIMIZER}" optimize --dry-run --no-color --force --feature http3 2>&1 || true)
+    http3_lines=$(printf '%s' "$http3_output" | grep -c 'Would configure HTTP/3' || true)
+    if [ "$http3_lines" -ge 6 ]; then
+        log_fail "HTTP/3 dry-run printed $http3_lines per-site lines ($site_found sites: should collapse)"
+    elif printf '%s' "$http3_output" | grep -qE 'Would configure HTTP/3.*->.*[0-9]+ sites'; then
+        log_pass "HTTP/3 per-site list collapsed to a count line"
+    else
+        log_pass "HTTP/3 printed $http3_lines site lines (<=5 eligible of $site_found sites)"
+    fi
+
+    # --verbose keeps the full per-site list
+    http3_verbose=$("${OPTIMIZER}" optimize --dry-run --no-color --force --feature http3 --verbose 2>&1 || true)
+    http3_vlines=$(printf '%s' "$http3_verbose" | grep -c 'Would configure HTTP/3' || true)
+    if [ "$http3_vlines" -gt 5 ]; then
+        log_pass "--verbose keeps the full per-site list ($http3_vlines lines)"
+    else
+        log_fail "--verbose collapsed the per-site list ($http3_vlines lines)"
+    fi
+
+    # Same collapse for the Redis per-site list
+    redis_output=$("${OPTIMIZER}" optimize --dry-run --no-color --force --feature redis 2>&1 || true)
+    redis_lines=$(printf '%s' "$redis_output" | grep -c 'Would add Redis to' || true)
+    if [ "$redis_lines" -ge 6 ]; then
+        log_fail "Redis dry-run printed $redis_lines per-site lines ($site_found sites: should collapse)"
+    else
+        log_pass "Redis per-site list collapsed or <=5 eligible ($redis_lines lines)"
+    fi
+fi
+
+################################################################################
 # Summary
 ################################################################################
 echo ""

@@ -54,7 +54,7 @@ input validation, auto-rollback safety, and pre-flight checks.
 
 ### UX
 - [ ] `--no-color` flag for CI environments
-- [ ] Better progress indicators
+- [x] Better progress indicators
 - [x] Full JSON output (not placeholder)
 - [x] Clean up dry-run output in interactive mode
 

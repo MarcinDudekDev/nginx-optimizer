@@ -1092,7 +1092,10 @@ apply_optimizations() {
         transaction_start
     fi
 
-    # Loop through all registered features
+    # Collect the features this run will actually attempt (after
+    # --feature/--exclude filters) so each in-progress line can carry an
+    # i/n counter.
+    local -a features_to_apply=()
     local feature_id
     while IFS= read -r feature_id; do
         [ -z "$feature_id" ] && continue
@@ -1106,22 +1109,29 @@ apply_optimizations() {
             continue
         fi
 
+        features_to_apply+=("$feature_id")
+    done < <(feature_list)
+
+    local feature_total=${#features_to_apply[@]}
+    local feature_index
+    # Index loop: "${arr[@]}" on an empty array errors under set -u on bash 3.2.
+    for ((feature_index=0; feature_index<feature_total; feature_index++)); do
+        feature_id="${features_to_apply[$feature_index]}"
+
         # Get feature display name
         local display_name
         display_name=$(feature_get "$feature_id" "display" 2>/dev/null)
         [ -z "$display_name" ] && display_name="$feature_id"
 
-        # Show progress
-        if [ "$DRY_RUN" = true ]; then
-            if type -t ui_step_pending &>/dev/null; then
-                ui_step_pending "Previewing $display_name..."
-            else
-                echo "  Previewing $display_name..."
-            fi
-        elif type -t ui_step &>/dev/null; then
-            ui_step "Applying $display_name..."
+        # Show progress: pending marker + counter (the completed checkmark is
+        # for the result line below)
+        local step_label="Applying $display_name... [$((feature_index + 1))/$feature_total]"
+        if type -t ui_step_pending &>/dev/null; then
+            ui_step_pending "$step_label"
+        elif [ "$DRY_RUN" = true ]; then
+            echo "  $step_label"
         else
-            log_info "Applying $display_name..."
+            log_info "$step_label"
         fi
 
         # Apply feature via registry
@@ -1157,7 +1167,7 @@ apply_optimizations() {
                 log_warn "Failed to apply $display_name"
             fi
         fi
-    done < <(feature_list)
+    done
 
     # Commit transaction if active
     if [ "$DRY_RUN" = false ] && [ "${CHECK_MODE:-false}" = false ] && [ "${TRANSACTION_ACTIVE:-false}" = true ]; then

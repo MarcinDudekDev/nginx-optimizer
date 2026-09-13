@@ -134,6 +134,9 @@ _http3_inject_system_nginx() {
     fi
 
     local first_site=true
+    if type -t site_list_begin &>/dev/null; then
+        site_list_begin
+    fi
     for site_conf in "$sites_dir"/*; do
         [ -f "$site_conf" ] || continue
 
@@ -164,7 +167,9 @@ _http3_inject_system_nginx() {
         fi
 
         if [ "${DRY_RUN:-false}" = true ]; then
-            if type -t ui_step_path &>/dev/null; then
+            if type -t site_list_step &>/dev/null; then
+                site_list_step "Would configure HTTP/3" "$(basename "$site_conf")"
+            elif type -t ui_step_path &>/dev/null; then
                 ui_step_path "Would configure HTTP/3" "$(basename "$site_conf")"
             fi
             continue
@@ -208,15 +213,25 @@ _http3_inject_system_nginx() {
         fi
 
         $SUDO rm -f "$backup"
-        if type -t ui_step_path &>/dev/null; then
+        if type -t site_list_step &>/dev/null; then
+            site_list_step "Configured HTTP/3" "$(basename "$site_conf")"
+        elif type -t ui_step_path &>/dev/null; then
             ui_step_path "Configured HTTP/3" "$(basename "$site_conf")"
         fi
     done
+
+    if type -t site_list_flush &>/dev/null; then
+        site_list_flush
+    fi
 }
 
 # Configure HTTP/3 for wp-test site
 _http3_configure_wptest() {
     local target_site="$1"
+
+    if type -t site_list_begin &>/dev/null; then
+        site_list_begin
+    fi
 
     # Use helper if available
     if type -t iterate_wptest_sites &>/dev/null; then
@@ -235,6 +250,10 @@ _http3_configure_wptest() {
             done
         fi
     fi
+
+    if type -t site_list_flush &>/dev/null; then
+        site_list_flush
+    fi
 }
 
 _http3_configure_wptest_site() {
@@ -245,7 +264,9 @@ _http3_configure_wptest_site() {
     local proxy_conf_dir="${wp_test_nginx}/conf.d"
 
     if [ "${DRY_RUN:-false}" = true ]; then
-        if type -t ui_step_path &>/dev/null; then
+        if type -t site_list_step &>/dev/null; then
+            site_list_step "Would configure HTTP/3" "$site"
+        elif type -t ui_step_path &>/dev/null; then
             ui_step_path "Would configure HTTP/3" "$site"
         fi
         return 0
@@ -272,7 +293,9 @@ EOF
         cp "$template_path" "$proxy_conf_dir/"
     fi
 
-    if type -t ui_step_path &>/dev/null; then
+    if type -t site_list_step &>/dev/null; then
+        site_list_step "Configured HTTP/3" "$site"
+    elif type -t ui_step_path &>/dev/null; then
         ui_step_path "Configured HTTP/3" "$site"
     fi
 
