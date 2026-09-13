@@ -92,7 +92,7 @@ bash4_pat="decl""are -A|map""file |read""array "
 bash4_hits=$(grep -rEn "$bash4_pat" \
     "${SCRIPT_DIR}/../nginx-optimizer-lib/" \
     "${SCRIPT_DIR}/run-tests.sh" "${SCRIPT_DIR}/test-corpus.sh" \
-    "${SCRIPT_DIR}/test-with-nginx.sh" 2>/dev/null \
+    "${SCRIPT_DIR}/test-with-nginx.sh" "${SCRIPT_DIR}/test-version-matrix.sh" 2>/dev/null \
     | grep -v ":[0-9]*:[[:space:]]*#" || true)
 if [ -n "$bash4_hits" ]; then
     log_fail "Found bash 4+ constructs (macOS ships bash 3.2): $bash4_hits"
@@ -1247,6 +1247,28 @@ source "${SCRIPT_DIR}/../lib/core/sysinfo.sh"
 # Reset caches so nothing downstream inherits a simulated box
 _SYSINFO_RAM_MB=""
 _SYSINFO_CPU_CORES=""
+
+################################################################################
+# SECTION 21: Nginx Version Matrix (issue #18)
+################################################################################
+log_section "Nginx Version Matrix (Docker)"
+
+# tests/test-version-matrix.sh runs `nginx -t` inside the official
+# nginx:1.18 / 1.22 / 1.25 / 1.27 images: a minimal full config and the
+# portable http-context templates must pass on all four, while HTTP/3-era
+# fixtures are gated by the version that introduced their directives
+# (skip on 1.18/1.22, run on 1.25/1.27). Docker missing or the daemon down
+# is a skip — same contract as test-with-nginx.sh, so CI without Docker
+# stays green.
+if [ ! -f "${SCRIPT_DIR}/test-version-matrix.sh" ]; then
+    log_fail "tests/test-version-matrix.sh missing"
+elif ! command -v docker &>/dev/null || ! docker info &>/dev/null 2>&1; then
+    log_skip "Version matrix needs Docker (run ./tests/test-version-matrix.sh where Docker runs)"
+elif bash "${SCRIPT_DIR}/test-version-matrix.sh"; then
+    log_pass "Version matrix passed on nginx 1.18 / 1.22 / 1.25 / 1.27"
+else
+    log_fail "Version matrix failed"
+fi
 
 ################################################################################
 # Summary

@@ -46,7 +46,11 @@ input validation, auto-rollback safety, and pre-flight checks.
       10 shape directories, every one validated against real nginx in Docker, with a
       shape checklist (`tests/configs/SHAPES.md`), a provenance manifest and a
       near-duplicate assertion (`tests/test-corpus.sh`) so the count cannot be gamed
-- [ ] Nginx version matrix testing (1.18, 1.22, 1.25, 1.27)
+- [x] Nginx version matrix testing (1.18, 1.22, 1.25, 1.27) — `tests/test-version-matrix.sh`
+      runs `nginx -t` in each official Docker image: a minimal full config and the
+      portable http-context templates must pass on all four, while HTTP/3-era
+      fixtures skip below their minimum version instead of failing. Wired into
+      `tests/run-tests.sh`; skips cleanly without Docker or a missing Hub tag
 
 ### UX
 - [ ] `--no-color` flag for CI environments
