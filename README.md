@@ -143,6 +143,7 @@ nginx-optimizer optimize --exclude brotli
 | `list` | List all detected nginx installations |
 | `benchmark [site]` | Run performance tests |
 | `check [site]` | Pre-flight readiness check (deps, config, features) |
+| `doctor` | Diagnose common issues (read-only, no changes) |
 | `update` | Self-update from GitHub |
 | `help` | Show help message |
 

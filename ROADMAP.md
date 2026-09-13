@@ -38,7 +38,7 @@ input validation, auto-rollback safety, and pre-flight checks.
 ### Commands
 - [ ] `remove` command - Cleanly uninstall optimizations
 - [ ] `diff` command - Show exact changes before applying
-- [ ] `doctor` command - Diagnose common issues
+- [x] `doctor` command - Diagnose common issues
 
 ### Testing
 - [x] Rollback verification (apply -> rollback -> compare)

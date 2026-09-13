@@ -477,6 +477,7 @@ COMMANDS:
     honeypot-logs [hours]       Analyze honeypot logs (default: 24h)
     honeypot-export             Export attacker IPs for blocklists
     check [site]                Pre-flight readiness check (deps, config, features)
+    doctor                      Diagnose common nginx/PHP-FPM issues (read-only)
     diff [timestamp]            Compare current config with backup
     remove [--feature <name>]   Remove applied optimizations
     verify                      Verify applied state matches running config
@@ -971,6 +972,193 @@ cmd_check() {
         fi
         return 1
     fi
+}
+
+################################################################################
+# doctor — read-only diagnostics
+#
+# `check` is a pre-flight (deps present, config valid, registry loaded).
+# `doctor` diagnoses WHY a run would fail on this machine: which nginx it can
+# actually reach, which optional modules were compiled in, whether PHP-FPM has
+# a socket to tune, and whether a stale lock is blocking everything.
+# It never writes nginx config and never takes the run lock (see main()).
+################################################################################
+
+# Result line helpers — ui_* when the UI lib is loaded, plain logs otherwise.
+_doctor_pass() {
+    if type -t ui_step &>/dev/null; then
+        ui_step "$1" "${2:-}"
+    else
+        log_success "  $1${2:+ ($2)}"
+    fi
+}
+
+_doctor_warn() {
+    if type -t ui_step_pending &>/dev/null; then
+        ui_step_pending "$1${2:+ — $2}"
+    else
+        log_warn "  $1${2:+ — $2}"
+    fi
+}
+
+_doctor_fail() {
+    if type -t ui_step_fail &>/dev/null; then
+        ui_step_fail "$1" "${2:-}"
+    else
+        log_error "  $1${2:+ — $2}"
+    fi
+}
+
+cmd_doctor() {
+    if type -t ui_header &>/dev/null; then
+        ui_header
+        ui_context "Diagnosing" "nginx / PHP-FPM environment"
+        ui_blank
+    else
+        log_info "Diagnosing nginx / PHP-FPM environment..."
+    fi
+
+    local errors=0
+    local warnings=0
+
+    # Docker fallback: a running wp-test-proxy container provides an nginx to
+    # inspect even when no system binary exists.
+    local docker_proxy=false
+    if command -v docker &>/dev/null && \
+       docker ps --format "{{.Names}}" 2>/dev/null | grep -q "wp-test-proxy"; then
+        docker_proxy=true
+    fi
+
+    # 1. nginx binary + version
+    if type -t ui_section &>/dev/null; then
+        ui_section "nginx"
+    fi
+    if command -v nginx &>/dev/null; then
+        _doctor_pass "nginx binary: $(command -v nginx)" "$(nginx -v 2>&1 | head -1)"
+    elif [ "$docker_proxy" = true ]; then
+        _doctor_warn "nginx not on PATH" "using wp-test-proxy container instead"
+    else
+        _doctor_fail "nginx not on PATH" "install nginx or start wp-test (docker)"
+        errors=$((errors + 1))
+    fi
+
+    # 2. nginx -t — system binary first, else inside the wp-test-proxy container.
+    #    Capture once so the error tail can be printed instead of hidden.
+    local nginx_V=""
+    local t_out=""
+    if command -v nginx &>/dev/null; then
+        nginx_V=$(nginx -V 2>&1 || true)
+        if t_out=$(nginx -t 2>&1); then
+            _doctor_pass "nginx -t: configuration valid"
+        else
+            _doctor_fail "nginx -t failed"
+            printf '%s\n' "$t_out" | tail -5 | while IFS= read -r line; do echo "    $line"; done
+            errors=$((errors + 1))
+        fi
+    elif [ "$docker_proxy" = true ]; then
+        nginx_V=$(docker exec wp-test-proxy nginx -V 2>&1 || true)
+        if t_out=$(docker exec wp-test-proxy nginx -t 2>&1); then
+            _doctor_pass "nginx -t (wp-test-proxy): configuration valid"
+        else
+            _doctor_fail "nginx -t failed inside wp-test-proxy"
+            printf '%s\n' "$t_out" | tail -5 | while IFS= read -r line; do echo "    $line"; done
+            errors=$((errors + 1))
+        fi
+    else
+        _doctor_warn "nginx -t skipped" "no nginx to test"
+    fi
+
+    # 3. HTTP/3 (QUIC) module — must be compiled in for --feature http3.
+    #    `--with-http_v3_module` contains the same substring, one grep covers both.
+    # 4. Brotli module — must be compiled in for --feature brotli.
+    if [ -n "$nginx_V" ]; then
+        if printf '%s' "$nginx_V" | grep -q "http_v3_module"; then
+            _doctor_pass "HTTP/3 (QUIC) module compiled in"
+        else
+            _doctor_warn "HTTP/3 not compiled in" "skip --feature http3 or compile nginx >= 1.25"
+            warnings=$((warnings + 1))
+        fi
+        if printf '%s' "$nginx_V" | grep -qi "brotli"; then
+            _doctor_pass "Brotli module compiled in"
+        else
+            _doctor_warn "Brotli module absent" "skip --feature brotli"
+            warnings=$((warnings + 1))
+        fi
+    else
+        _doctor_warn "module checks skipped" "nginx -V unavailable"
+        warnings=$((warnings + 1))
+    fi
+
+    # 5. PHP-FPM socket — php-fpm-tuning and upstream-keepalive need one.
+    local fpm_sock=""
+    local sock
+    for sock in /var/run/php/php-fpm.sock \
+                /var/run/php-fpm.sock \
+                /run/php/php-fpm.sock \
+                /opt/homebrew/var/run/php-fpm.sock \
+                /usr/local/var/run/php-fpm.sock; do
+        if [ -S "$sock" ]; then
+            fpm_sock="$sock"
+            break
+        fi
+    done
+    if [ -z "$fpm_sock" ]; then
+        for sock in /var/run/php/*.sock; do
+            if [ -S "$sock" ]; then
+                fpm_sock="$sock"
+                break
+            fi
+        done
+    fi
+    if [ -n "$fpm_sock" ]; then
+        _doctor_pass "PHP-FPM socket found" "$fpm_sock"
+    else
+        _doctor_warn "PHP-FPM socket not found" "php-fpm-tuning / upstream-keepalive will fail (or PHP runs in a container)"
+        warnings=$((warnings + 1))
+    fi
+
+    # 6. Backup directory writable
+    if [ -d "$BACKUP_DIR" ] && [ -w "$BACKUP_DIR" ]; then
+        _doctor_pass "backup directory writable" "$BACKUP_DIR"
+    else
+        _doctor_fail "backup directory not writable" "$BACKUP_DIR"
+        errors=$((errors + 1))
+    fi
+
+    # 7. Lock file — a stale lock is the usual cause of an "another instance is
+    #    running" hang. doctor never takes this lock itself, so anything found
+    #    here genuinely belongs to another (or a dead) run.
+    if [ -e "$LOCK_FILE" ]; then
+        local lock_pid=""
+        if [ -f "$LOCK_FILE/pid" ]; then
+            lock_pid=$(cat "$LOCK_FILE/pid" 2>/dev/null || true)
+        fi
+        if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
+            _doctor_warn "lock held by pid $lock_pid" "another instance is running — wait for it"
+        else
+            _doctor_warn "stale lock at $LOCK_FILE" "rm -rf $LOCK_FILE if no other run is active"
+        fi
+        warnings=$((warnings + 1))
+    else
+        _doctor_pass "no lock file" "$LOCK_FILE"
+    fi
+
+    # Summary — warnings (missing brotli/http3/socket) never fail the run.
+    echo ""
+    if [ "$errors" -eq 0 ]; then
+        if type -t ui_success_box &>/dev/null; then
+            ui_success_box "Diagnosis complete" "$warnings warning(s), 0 errors"
+        else
+            log_success "Diagnosis complete: $warnings warning(s), 0 errors"
+        fi
+        return 0
+    fi
+    if type -t ui_warn_box &>/dev/null; then
+        ui_warn_box "$errors error(s), $warnings warning(s) — see hints above"
+    else
+        log_error "Diagnosis: $errors error(s), $warnings warning(s)"
+    fi
+    return 1
 }
 
 cmd_remove() {
@@ -1539,7 +1727,7 @@ parse_arguments() {
 
     while [ $# -gt 0 ]; do
         case "$1" in
-            analyze|optimize|compile|rollback|test|status|list|benchmark|check|diff|remove|verify|help|update|honeypot|honeypot-logs|honeypot-export|honeypot-fail2ban|fix-warnings)
+            analyze|optimize|compile|rollback|test|status|list|benchmark|check|doctor|diff|remove|verify|help|update|honeypot|honeypot-logs|honeypot-export|honeypot-fail2ban|fix-warnings)
                 COMMAND="$1"
                 shift
                 ;;
@@ -1709,8 +1897,13 @@ main() {
     # Apply color settings after parsing (handles --no-color and pipe detection)
     apply_color_settings
 
-    # Acquire lock to prevent race conditions
-    acquire_lock
+    # Acquire lock to prevent race conditions.
+    # doctor is read-only diagnostics and must not take the lock: a stuck lock
+    # is one of the things it reports, and it has to run while another instance
+    # holds it.
+    if [ "$COMMAND" != "doctor" ]; then
+        acquire_lock
+    fi
 
     # Combined cleanup handler: rollback active transactions + release lock
     cleanup_handler() {
@@ -1719,7 +1912,10 @@ main() {
             transaction_rollback
             log_warn "Transaction rolled back due to interruption" 2>/dev/null || true
         fi
-        release_lock
+        # Only release a lock this run actually acquired (doctor never holds it)
+        if [ "$COMMAND" != "doctor" ]; then
+            release_lock
+        fi
     }
     trap cleanup_handler EXIT INT TERM
 
@@ -1764,6 +1960,9 @@ main() {
             ;;
         check)
             cmd_check
+            ;;
+        doctor)
+            cmd_doctor
             ;;
         diff)
             cmd_diff
