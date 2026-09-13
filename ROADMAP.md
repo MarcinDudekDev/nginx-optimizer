@@ -41,7 +41,7 @@ input validation, auto-rollback safety, and pre-flight checks.
 - [ ] `doctor` command - Diagnose common issues
 
 ### Testing
-- [ ] Rollback verification (apply -> rollback -> compare)
+- [x] Rollback verification (apply -> rollback -> compare)
 - [x] Real-world config corpus testing — 49 valid configs + 3 negative fixtures across
       10 shape directories, every one validated against real nginx in Docker, with a
       shape checklist (`tests/configs/SHAPES.md`), a provenance manifest and a
