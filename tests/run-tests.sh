@@ -1552,6 +1552,42 @@ else
 fi
 
 ################################################################################
+# SECTION 24: doctor Command Tests
+################################################################################
+log_section "doctor Command Tests"
+
+# doctor must be listed in help output
+doctor_help=$("${OPTIMIZER}" help 2>&1 || true)
+if printf "%s" "$doctor_help" | grep -q "doctor"; then
+    log_pass "help lists doctor"
+else
+    log_fail "help does not list doctor"
+fi
+
+# doctor runs read-only diagnostics: exit 0 (clean) or 1 (errors found) —
+# never usage-error territory (2/127). stdin is /dev/null so a pre-doctor
+# build that falls through to the interactive wizard cannot hang this test.
+doctor_rc=0
+doctor_output=$("${OPTIMIZER}" doctor --no-color </dev/null 2>&1) || doctor_rc=$?
+if [ "$doctor_rc" -le 1 ]; then
+    log_pass "doctor --no-color runs (exit $doctor_rc)"
+else
+    log_fail "doctor --no-color exited $doctor_rc"
+fi
+
+if printf "%s" "$doctor_output" | grep -qi "nginx"; then
+    log_pass "doctor reports on nginx"
+else
+    log_fail "doctor output missing nginx diagnostics"
+fi
+
+if printf "%s" "$doctor_output" | grep -qiE "brotli|HTTP/3|QUIC|PHP-FPM"; then
+    log_pass "doctor reports module/socket diagnostics"
+else
+    log_fail "doctor output missing brotli/HTTP-3/QUIC/PHP-FPM diagnostics"
+fi
+
+################################################################################
 # Summary
 ################################################################################
 echo ""
