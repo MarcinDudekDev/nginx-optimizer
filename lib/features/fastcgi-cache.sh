@@ -140,8 +140,8 @@ _fastcgi_create_cache_dir() {
         return 0
     fi
 
-    # Try system directory first
-    if sudo mkdir -p "$cache_dir" 2>/dev/null; then
+    # Try system directory first (elevates only if the parent is not writable)
+    if smart_mkdir "$cache_dir" 2>/dev/null; then
         sudo chown -R www-data:www-data "$cache_dir" 2>/dev/null || \
         sudo chown -R _www:_www "$cache_dir" 2>/dev/null || \
         sudo chown -R nginx:nginx "$cache_dir" 2>/dev/null || true
@@ -223,14 +223,8 @@ _fastcgi_deploy_system() {
     else
         local template_dir="${TEMPLATE_DIR:-nginx-optimizer-templates}"
 
-        # Create snippets directory with sudo if needed
-        if [ ! -d "$snippets_dir" ]; then
-            if [ -w "$(dirname "$snippets_dir")" ]; then
-                mkdir -p "$snippets_dir" 2>/dev/null
-            else
-                sudo mkdir -p "$snippets_dir" 2>/dev/null
-            fi
-        fi
+        # Create snippets directory, elevating only if needed
+        smart_mkdir "$snippets_dir" 2>/dev/null
 
         # Deploy templates: server-level skip rules + location-level cache directives + purge endpoint
         local template_name
@@ -239,13 +233,7 @@ _fastcgi_deploy_system() {
             local dst="${snippets_dir}/${template_name}"
 
             if [ -f "$src" ]; then
-                if type -t smart_copy &>/dev/null; then
-                    smart_copy "$src" "$dst"
-                elif [ -w "$snippets_dir" ]; then
-                    cp "$src" "$dst" 2>/dev/null
-                else
-                    sudo cp "$src" "$dst" 2>/dev/null
-                fi
+                smart_copy "$src" "$dst" 2>/dev/null
 
                 if [ -f "$dst" ]; then
                     if type -t ui_step_path &>/dev/null; then
@@ -299,12 +287,8 @@ _fastcgi_deploy_confd() {
     fi
 
     if [ -f "$src" ]; then
-        # Create directory with sudo if needed
-        if [ -w "$confd_dir" ]; then
-            mkdir -p "$confd_dir" 2>/dev/null
-        else
-            sudo mkdir -p "$confd_dir" 2>/dev/null
-        fi
+        # Create directory, elevating only if needed
+        smart_mkdir "$confd_dir" 2>/dev/null
 
         # Get RAM-aware zone sizes
         local keys_zone="100m"
@@ -320,11 +304,7 @@ _fastcgi_deploy_confd() {
         sed -e "s|keys_zone=WORDPRESS:100m|keys_zone=WORDPRESS:${keys_zone}|g" \
             -e "s|max_size=512m|max_size=${max_size}|g" "$src" > "$temp_file"
 
-        if [ -w "$confd_dir" ]; then
-            cp "$temp_file" "$dst" 2>/dev/null
-        else
-            sudo cp "$temp_file" "$dst" 2>/dev/null
-        fi
+        smart_copy "$temp_file" "$dst" 2>/dev/null
         rm -f "$temp_file"
 
         if [ -f "$dst" ]; then
@@ -448,7 +428,7 @@ _fastcgi_inject_system() {
             }
         }' "$site_conf" > "$temp_file"
 
-        if sudo cp "$temp_file" "$site_conf" 2>/dev/null; then
+        if smart_copy "$temp_file" "$site_conf" 2>/dev/null; then
             if type -t ui_step_path &>/dev/null; then
                 ui_step_path "Configured site" "$(basename "$site_conf")"
             fi

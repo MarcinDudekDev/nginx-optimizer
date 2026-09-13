@@ -210,23 +210,23 @@ feature_apply_custom_server_tuning() {
     }' "$nginx_conf" > "$temp_file"
 
     # Smart sudo: only use if file not writable
-    local use_sudo=""
+    local SUDO=""
     if [[ ! -w "$nginx_conf" ]]; then
-        use_sudo="sudo"
+        SUDO="sudo"
     fi
 
     # Backup original
-    $use_sudo cp "$nginx_conf" "${nginx_conf}.tuning-bak"
+    $SUDO cp "$nginx_conf" "${nginx_conf}.tuning-bak"
 
     # Apply changes
-    $use_sudo cp "$temp_file" "$nginx_conf"
+    $SUDO cp "$temp_file" "$nginx_conf"
     rm -f "$temp_file"
 
     # Validate
     if command -v nginx &>/dev/null; then
         if ! nginx -t 2>&1 | grep -q "test is successful\|syntax is ok"; then
             # Rollback on failure
-            $use_sudo mv "${nginx_conf}.tuning-bak" "$nginx_conf"
+            $SUDO mv "${nginx_conf}.tuning-bak" "$nginx_conf"
             if type -t log_warn &>/dev/null; then
                 log_warn "nginx -t failed after tuning, rolled back"
             fi
@@ -234,7 +234,7 @@ feature_apply_custom_server_tuning() {
         fi
     fi
 
-    $use_sudo rm -f "${nginx_conf}.tuning-bak"
+    $SUDO rm -f "${nginx_conf}.tuning-bak"
 
     if type -t ui_step_path &>/dev/null; then
         ui_step_path "Tuned nginx.conf" "${ram_mb}MB RAM → worker_connections ${worker_conn}"

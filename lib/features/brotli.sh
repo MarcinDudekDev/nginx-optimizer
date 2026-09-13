@@ -185,12 +185,8 @@ feature_apply_custom_brotli() {
         return 0
     fi
 
-    # Deploy with smart sudo
-    if [ -w "$confd_dir" ]; then
-        cp "$src" "$dst"
-    else
-        sudo cp "$src" "$dst"
-    fi
+    # Deploy (elevates via sudo only if conf.d is not writable)
+    smart_copy "$src" "$dst"
 
     if type -t ui_step_path &>/dev/null; then
         ui_step_path "Deployed" "conf.d/compression.conf"

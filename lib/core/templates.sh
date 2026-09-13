@@ -71,7 +71,7 @@ template_deploy_to_confd() {
         return 0
     fi
 
-    if sudo cp "$source" "$dest" 2>/dev/null; then
+    if smart_copy "$source" "$dest" 2>/dev/null; then
         if type -t ui_step_path &>/dev/null; then
             ui_step_path "Deployed" "conf.d/${name}"
         fi
@@ -99,8 +99,8 @@ template_deploy_to_snippets() {
         return 0
     fi
 
-    sudo mkdir -p /etc/nginx/snippets 2>/dev/null
-    if sudo cp "$source" "$dest" 2>/dev/null; then
+    smart_mkdir /etc/nginx/snippets 2>/dev/null
+    if smart_copy "$source" "$dest" 2>/dev/null; then
         if type -t ui_step_path &>/dev/null; then
             ui_step_path "Deployed" "snippets/${name}"
         fi

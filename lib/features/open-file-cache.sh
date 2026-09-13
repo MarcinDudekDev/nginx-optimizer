@@ -184,11 +184,7 @@ open_file_cache_valid 30s;
 open_file_cache_min_uses 2;
 open_file_cache_errors on;
 "
-    if [[ -w "$confd_dir" ]]; then
-        printf '%s' "$tuned_content" > "$dst"
-    else
-        printf '%s' "$tuned_content" | sudo tee "$dst" > /dev/null
-    fi
+    printf '%s' "$tuned_content" | smart_write "$dst"
 
     if [[ -f "$dst" ]]; then
         if type -t ui_step_path &>/dev/null; then

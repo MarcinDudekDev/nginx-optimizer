@@ -121,20 +121,10 @@ _security_deploy_ddos_protection() {
     sed -e "s|limit_conn addr 50|limit_conn addr ${conn_per_ip}|g" \
         -e "s|limit_conn perserver 10000|limit_conn perserver ${conn_per_server}|g" "$src" > "$temp_file"
 
-    if [[ ! -d "$snippets_dir" ]]; then
-        if [[ -w "$(dirname "$snippets_dir")" ]]; then
-            mkdir -p "$snippets_dir" 2>/dev/null
-        else
-            sudo mkdir -p "$snippets_dir" 2>/dev/null
-        fi
-    fi
+    smart_mkdir "$snippets_dir" 2>/dev/null
 
     local dst="${snippets_dir}/ddos-protection.conf"
-    if [[ -w "$snippets_dir" ]]; then
-        cp "$temp_file" "$dst"
-    else
-        sudo cp "$temp_file" "$dst"
-    fi
+    smart_copy "$temp_file" "$dst"
     rm -f "$temp_file"
 
     if [[ -f "$dst" ]]; then

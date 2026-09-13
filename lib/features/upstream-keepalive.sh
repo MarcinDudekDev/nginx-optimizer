@@ -230,13 +230,7 @@ _keepalive_deploy_upstream() {
         # Replace the default socket path and keepalive value with tuned ones
         sed -e "s|unix:/var/run/php-fpm.sock|${fpm_socket}|g" -e "s|keepalive 16|keepalive ${keepalive_conns}|g" "$src" > "$temp_file"
 
-        if type -t smart_copy &>/dev/null; then
-            smart_copy "$temp_file" "$dst"
-        elif [[ -w "$confd_dir" ]]; then
-            cp "$temp_file" "$dst"
-        else
-            sudo cp "$temp_file" "$dst"
-        fi
+        smart_copy "$temp_file" "$dst"
         rm -f "$temp_file"
 
         if [[ -f "$dst" ]]; then
@@ -334,7 +328,7 @@ _keepalive_inject_sites() {
             }
         }' "$site_conf" > "$temp_file"
 
-        if sudo cp "$temp_file" "$site_conf" 2>/dev/null; then
+        if smart_copy "$temp_file" "$site_conf" 2>/dev/null; then
             if type -t ui_step_path &>/dev/null; then
                 ui_step_path "Configured site" "$(basename "$site_conf")"
             fi

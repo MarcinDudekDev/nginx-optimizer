@@ -174,12 +174,12 @@ _http3_inject_system_nginx() {
         local backup="${site_conf}.http3bak"
 
         # Smart sudo: only use if file not writable
-        local use_sudo=""
+        local SUDO=""
         if [ ! -w "$site_conf" ]; then
-            use_sudo="sudo"
+            SUDO="sudo"
         fi
 
-        $use_sudo cp "$site_conf" "$backup"
+        $SUDO cp "$site_conf" "$backup"
 
         awk -v quic="$quic_directive" -v quic_v6="$quic_directive_v6" '
         {
@@ -199,15 +199,15 @@ _http3_inject_system_nginx() {
             }
         }' "$site_conf" > "${site_conf}.tmp"
 
-        $use_sudo mv "${site_conf}.tmp" "$site_conf"
+        $SUDO mv "${site_conf}.tmp" "$site_conf"
 
         # Validate
         if nginx -t 2>&1 | grep -q "test failed\|emerg"; then
-            $use_sudo mv "$backup" "$site_conf"
+            $SUDO mv "$backup" "$site_conf"
             continue
         fi
 
-        $use_sudo rm -f "$backup"
+        $SUDO rm -f "$backup"
         if type -t ui_step_path &>/dev/null; then
             ui_step_path "Configured HTTP/3" "$(basename "$site_conf")"
         fi
