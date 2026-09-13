@@ -526,6 +526,52 @@ else
     log_fail "optimize --dry-run failed"
 fi
 
+# Interactive dry-run must read as a preview: no past-tense completion claims
+# and no raw logger tokens leaking through tee (issue #4).
+dryrun_output=$("${OPTIMIZER}" optimize --dry-run --no-color --force 2>&1 || true)
+
+if echo "$dryrun_output" | grep -qi "DRY RUN"; then
+    log_pass "dry-run keeps the DRY RUN banner"
+else
+    log_fail "dry-run lost the DRY RUN banner"
+fi
+
+if echo "$dryrun_output" | grep -q "Optimization complete"; then
+    log_fail "dry-run claims 'Optimization complete'"
+else
+    log_pass "dry-run does not claim 'Optimization complete'"
+fi
+
+if echo "$dryrun_output" | grep -qE "Applied [0-9]+ optimization"; then
+    log_fail "dry-run prints 'Applied N optimization(s)'"
+else
+    log_pass "dry-run has no past-tense applied count"
+fi
+
+if echo "$dryrun_output" | grep -qE " applied$"; then
+    log_fail "dry-run feature lines end in ' applied'"
+else
+    log_pass "dry-run feature lines avoid ' applied'"
+fi
+
+if echo "$dryrun_output" | grep -q "Applying optimizations"; then
+    log_fail "dry-run still says 'Applying optimizations...'"
+else
+    log_pass "dry-run section header uses preview wording"
+fi
+
+if echo "$dryrun_output" | grep -qiE "Would apply"; then
+    log_pass "dry-run uses 'Would apply' wording"
+else
+    log_fail "dry-run is missing 'Would apply' wording"
+fi
+
+if echo "$dryrun_output" | grep -qE "\[(INFO|WARN|ERROR|SUCCESS)\]"; then
+    log_fail "dry-run leaks raw logger tokens to stdout"
+else
+    log_pass "dry-run has no logger-token leakage"
+fi
+
 ################################################################################
 # SECTION 8: Idempotency Test
 ################################################################################
