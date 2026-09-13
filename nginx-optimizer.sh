@@ -201,6 +201,170 @@ json_output() {
     fi
 }
 
+# Emit DETECTED_INSTANCES ("type:name:path" entries) as a JSON array of
+# {type,name,path} objects. Path may contain colons, so only the first two
+# fields are split off.
+_json_instances() {
+    # ${arr[@]} on an empty array is an unbound-variable error under set -u on
+    # bash 3.2; ${arr[*]+x} expands only when the array has at least one entry.
+    if [ -z "${DETECTED_INSTANCES[*]+x}" ]; then
+        echo "[]"
+        return
+    fi
+    printf '%s\n' "${DETECTED_INSTANCES[@]}" \
+        | jq -R 'split(":") | {type: .[0], name: .[1], path: (.[2:] | join(":"))}' \
+        | jq -s '.'
+}
+
+# Emit registered features as a JSON array of {id,display} objects.
+_json_feature_list() {
+    if ! type -t feature_list_all &>/dev/null; then
+        echo "[]"
+        return
+    fi
+    feature_list_all \
+        | jq -R 'split("|") | {id: .[0], display: (.[1:] | join("|"))}' \
+        | jq -s '.'
+}
+
+# Print the config files feature detection should scan in JSON mode.
+# Args: $1 = site name (optional)
+# http-context configs (conf.d, nginx.conf, wp-test proxy.conf) apply to every
+# site, so they are always included. Server-context files (vhost.d, site
+# configs) are limited to the target site when one is given.
+_json_detect_files() {
+    local site="${1:-}"
+    local wp_nginx="${WP_TEST_NGINX:-$HOME/.wp-test/nginx}"
+    local confd sites_dir d f
+
+    confd=$(get_nginx_confd_dir 2>/dev/null || true)
+    sites_dir=$(get_nginx_sites_dir 2>/dev/null || true)
+
+    for d in "$confd" "$wp_nginx/conf.d"; do
+        [ -n "$d" ] && [ -d "$d" ] || continue
+        for f in "$d"/*; do
+            [ -f "$f" ] && echo "$f"
+        done
+    done
+
+    for f in "$(get_nginx_main_conf 2>/dev/null)" "$wp_nginx/proxy.conf"; do
+        [ -n "$f" ] && [ -f "$f" ] && echo "$f"
+    done
+
+    if [ -n "$site" ]; then
+        for f in "$wp_nginx/vhost.d/$site" "$wp_nginx/vhost.d/default"; do
+            [ -f "$f" ] && echo "$f"
+        done
+        if [ -n "$sites_dir" ] && [ -d "$sites_dir" ]; then
+            for f in "$sites_dir"/*"$site"*; do
+                [ -f "$f" ] && echo "$f"
+            done
+        fi
+    else
+        for d in "$sites_dir" "$wp_nginx/vhost.d"; do
+            [ -n "$d" ] && [ -d "$d" ] || continue
+            for f in "$d"/*; do
+                [ -f "$f" ] && echo "$f"
+            done
+        done
+    fi
+}
+
+# The most representative config file for a detection run: the site's own
+# server-context file when a site is targeted, otherwise the main config.
+# Args: $1 = site name (optional), $2 = newline-separated candidate files
+_json_primary_file() {
+    local site="${1:-}" files="${2:-}"
+    local wp_nginx="${WP_TEST_NGINX:-$HOME/.wp-test/nginx}"
+    local f sd
+
+    if [ -n "$site" ]; then
+        f="$wp_nginx/vhost.d/$site"
+        if [ -f "$f" ]; then
+            printf '%s\n' "$f"
+            return
+        fi
+        sd=$(get_nginx_sites_dir 2>/dev/null || true)
+        if [ -n "$sd" ] && [ -d "$sd" ]; then
+            for f in "$sd"/*"$site"*; do
+                if [ -f "$f" ]; then
+                    printf '%s\n' "$f"
+                    return
+                fi
+            done
+        fi
+    fi
+
+    f=$(get_nginx_main_conf 2>/dev/null || true)
+    if [ -n "$f" ] && [ -f "$f" ]; then
+        printf '%s\n' "$f"
+        return
+    fi
+    if [ -f "$wp_nginx/proxy.conf" ]; then
+        printf '%s\n' "$wp_nginx/proxy.conf"
+        return
+    fi
+    printf '%s\n' "$files" | head -1
+}
+
+# Run registry detection for one feature.
+# Args: $1 = feature_id, $2 = site name (optional)
+# Detection mirrors the registry's semantics:
+# - features with a custom detector get one feature_detect call on the primary
+#   file (customs also probe env/global state, exactly like the human per-site
+#   path which calls feature_detect once with the site's config file)
+# - the declared pattern and template includes are then bulk-grepped across
+#   every relevant file, so a hit in any site file still counts
+# Returns: 0 if detected, 1 otherwise
+_json_feature_detected() {
+    local fid="$1" site="${2:-}"
+    type -t feature_detect &>/dev/null || return 1
+    type -t feature_get &>/dev/null || return 1
+
+    local files
+    files=$(_json_detect_files "$site")
+
+    if [ "$(feature_get "$fid" custom_detect 2>/dev/null)" = "1" ]; then
+        local primary
+        primary=$(_json_primary_file "$site" "$files")
+        if [ -n "$primary" ] && feature_detect "$fid" "$primary" "$site" >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+
+    local pattern templates bulk_pat="" t
+    pattern=$(feature_get "$fid" pattern 2>/dev/null)
+    templates=$(feature_get "$fid" template 2>/dev/null)
+    [ -n "$pattern" ] && bulk_pat="$pattern"
+    if [ -n "$templates" ]; then
+        local IFS=','
+        for t in $templates; do
+            [ -n "$t" ] && bulk_pat="${bulk_pat:+${bulk_pat}|}include.*${t}"
+        done
+    fi
+    if [ -n "$bulk_pat" ] && [ -n "$files" ]; then
+        # xargs exit status is per-batch, so test the matched-file list instead
+        if printf '%s\n' "$files" | tr '\n' '\0' \
+            | xargs -0 grep -lE "$bulk_pat" 2>/dev/null | grep -q .; then
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+# Check state for an applied feature. A site-scoped query also honours "all"
+# entries since they apply to every site.
+# Args: $1 = feature_id, $2 = site name ("" or "all" for the global view)
+_json_feature_applied() {
+    local fid="$1" site="${2:-}"
+    type -t get_applied_features &>/dev/null || return 1
+    if [ -n "$site" ] && [ "$site" != "all" ]; then
+        get_applied_features "$site" 2>/dev/null | grep -qx "$fid" && return 0
+    fi
+    get_applied_features "all" 2>/dev/null | grep -qx "$fid"
+}
+
 ################################################################################
 # Initialization
 ################################################################################
@@ -325,7 +489,7 @@ OPTIONS:
     --force                     Skip confirmations
     -q, --quiet                 Suppress informational output (for scripting)
     --verbose                   Show detailed technical output
-    --json                      Output JSON (for status, list commands)
+    --json                      Output JSON (for analyze, status, list, check, --version)
     --feature <name>            Apply specific feature only
     --exclude <name>            Exclude specific feature
     --backup-dir <path>         Custom backup directory
@@ -402,7 +566,7 @@ EOF
 
 show_version() {
     if [ "$JSON_OUTPUT" = true ]; then
-        json_output "{\"version\": \"${VERSION}\"}"
+        jq -n --arg v "$VERSION" '{version: $v}'
     else
         echo "nginx-optimizer version ${VERSION}"
     fi
@@ -414,33 +578,45 @@ show_version() {
 
 cmd_analyze() {
     if [ "$JSON_OUTPUT" = true ]; then
-        # Build real JSON from feature detection + state data
-        local json_features=""
-        if type -t feature_list &>/dev/null; then
-            local fid
-            while IFS= read -r fid; do
-                [ -z "$fid" ] && continue
-                local display
-                display=$(feature_get "$fid" "display" 2>/dev/null)
-                [ -z "$display" ] && display="$fid"
-                # Check if feature is in applied state
-                local applied="false"
-                if type -t get_applied_features &>/dev/null; then
-                    if get_applied_features "${TARGET_SITE:-all}" 2>/dev/null | grep -qx "$fid"; then
-                        applied="true"
-                    fi
-                fi
-                local entry
-                entry=$(printf '"%s":{"display":"%s","applied":%s}' "$fid" "$display" "$applied")
-                if [ -n "$json_features" ]; then
-                    json_features="${json_features},${entry}"
-                else
-                    json_features="$entry"
-                fi
-            done < <(feature_list)
+        # detect_nginx_instances exits on an unknown site, which would bypass
+        # JSON output entirely — report it as JSON instead.
+        if [ -n "$TARGET_SITE" ] && [ ! -d "${WP_TEST_SITES:-$HOME/.wp-test/sites}/$TARGET_SITE" ]; then
+            json_output "$(jq -nc --arg v "$VERSION" --arg t "$TARGET_SITE" \
+                '{command: "analyze", version: $v, target: $t,
+                  error: ("site not found: " + $t)}')"
+            return 1
         fi
-        json_output "$(printf '{"command":"analyze","version":"%s","target":"%s","features":{%s}}' \
-            "$VERSION" "${TARGET_SITE:-all}" "$json_features")"
+
+        # Populate DETECTED_INSTANCES (and the parser caches) the same way the
+        # human path does, without leaking UI lines into stdout.
+        if type -t detect_nginx_instances &>/dev/null; then
+            detect_nginx_instances "$TARGET_SITE" >/dev/null 2>&1 || true
+        fi
+
+        local instances_json
+        instances_json=$(_json_instances)
+
+        # detected runs real registry detection over the relevant config files;
+        # applied comes from the state file. The two legitimately differ.
+        local features_json="{}"
+        if type -t feature_list_all &>/dev/null; then
+            features_json=$(
+                while IFS='|' read -r fid fdisplay; do
+                    [ -z "$fid" ] && continue
+                    local applied=false detected=false
+                    _json_feature_applied "$fid" "$TARGET_SITE" && applied=true
+                    _json_feature_detected "$fid" "$TARGET_SITE" && detected=true
+                    jq -nc --arg k "$fid" --arg d "$fdisplay" \
+                        --argjson a "$applied" --argjson det "$detected" \
+                        '{($k): {display: $d, applied: $a, detected: $det}}'
+                done <<< "$(feature_list_all)" | jq -s 'add // {}'
+            )
+        fi
+
+        json_output "$(jq -nc --arg v "$VERSION" --arg t "${TARGET_SITE:-all}" \
+            --argjson f "$features_json" --argjson i "$instances_json" \
+            '{command: "analyze", version: $v, target: $t,
+              features: $f, instances: $i}')"
         return 0
     fi
 
@@ -544,16 +720,11 @@ cmd_status() {
         # Build JSON from state file data
         local applied_json="[]"
         if type -t load_applied_state &>/dev/null; then
-            local state
-            state=$(load_applied_state)
-            if command -v jq &>/dev/null; then
-                applied_json=$(echo "$state" | jq -c '.applied')
-            else
-                applied_json=$(echo "$state" | sed 's/.*"applied"://' | sed 's/}$//')
-            fi
+            applied_json=$(load_applied_state | jq -c '.applied // []' 2>/dev/null || echo "[]")
         fi
-        json_output "$(printf '{"command":"status","version":"%s","target":"%s","applied":%s}' \
-            "$VERSION" "${TARGET_SITE:-all}" "$applied_json")"
+        json_output "$(jq -nc --arg v "$VERSION" --arg t "${TARGET_SITE:-all}" \
+            --argjson a "$applied_json" \
+            '{command: "status", version: $v, target: $t, applied: $a}')"
         return 0
     fi
 
@@ -569,43 +740,17 @@ cmd_status() {
 
 cmd_list() {
     if [ "$JSON_OUTPUT" = true ]; then
-        # Build JSON from detected instances
-        local instances_json=""
-        if [ ${#DETECTED_INSTANCES[@]} -gt 0 ] 2>/dev/null; then
-            for inst in "${DETECTED_INSTANCES[@]}"; do
-                local itype iname ipath
-                itype="${inst%%:*}"
-                local rest="${inst#*:}"
-                iname="${rest%%:*}"
-                ipath="${rest#*:}"
-                local entry
-                entry=$(printf '{"type":"%s","name":"%s","path":"%s"}' "$itype" "$iname" "$ipath")
-                if [ -n "$instances_json" ]; then
-                    instances_json="${instances_json},${entry}"
-                else
-                    instances_json="$entry"
-                fi
-            done
+        # Populate DETECTED_INSTANCES the same way the human path does,
+        # without leaking UI lines into stdout.
+        if type -t detect_nginx_instances &>/dev/null; then
+            detect_nginx_instances "" >/dev/null 2>&1 || true
         fi
-        # Also list registered features
-        local features_json=""
-        if type -t feature_list_all &>/dev/null; then
-            local line
-            while IFS= read -r line; do
-                [ -z "$line" ] && continue
-                local fid="${line%%|*}"
-                local fdisplay="${line#*|}"
-                local entry
-                entry=$(printf '{"id":"%s","display":"%s"}' "$fid" "$fdisplay")
-                if [ -n "$features_json" ]; then
-                    features_json="${features_json},${entry}"
-                else
-                    features_json="$entry"
-                fi
-            done < <(feature_list_all)
-        fi
-        json_output "$(printf '{"command":"list","version":"%s","instances":[%s],"features":[%s]}' \
-            "$VERSION" "$instances_json" "$features_json")"
+        local instances_json features_json
+        instances_json=$(_json_instances)
+        features_json=$(_json_feature_list)
+        json_output "$(jq -nc --arg v "$VERSION" \
+            --argjson i "$instances_json" --argjson f "$features_json" \
+            '{command: "list", version: $v, instances: $i, features: $f}')"
         return 0
     fi
 
@@ -656,40 +801,75 @@ cmd_compile() {
 
 cmd_check() {
     if [ "$JSON_OUTPUT" = true ]; then
-        # Build JSON check output
-        local prereqs_json=""
+        # Mirror the same checks as the human path: prerequisites, nginx -t
+        # (system or wp-test-proxy), feature registry, backup dir writability.
+        # Issues are collected as newline-separated strings and encoded with jq.
+        local issues_list=""
+
+        # 1. Prerequisites
+        local prereqs_json="[]"
+        local cmd found
         for cmd in rsync curl jq; do
-            local found="false"
-            command -v "$cmd" &>/dev/null && found="true"
-            local entry
-            entry=$(printf '{"name":"%s","found":%s}' "$cmd" "$found")
-            if [ -n "$prereqs_json" ]; then
-                prereqs_json="${prereqs_json},${entry}"
-            else
-                prereqs_json="$entry"
+            found=false
+            command -v "$cmd" &>/dev/null && found=true
+            if [ "$found" = false ]; then
+                issues_list="${issues_list}missing prerequisite: ${cmd}"$'\n'
             fi
+            prereqs_json=$(jq -c --arg n "$cmd" --argjson f "$found" \
+                '. + [{name: $n, found: $f}]' <<<"$prereqs_json")
         done
-        local nginx_ready="false"
-        if command -v nginx &>/dev/null && nginx -t 2>/dev/null; then
-            nginx_ready="true"
+
+        # 2. nginx configuration (system first, wp-test-proxy fallback — same
+        # precedence as the human path; "no nginx at all" is a warn there, so
+        # nginx_valid=false but not an issue)
+        local nginx_valid=false
+        if command -v nginx &>/dev/null; then
+            if nginx -t 2>/dev/null; then
+                nginx_valid=true
+            else
+                issues_list="${issues_list}nginx configuration invalid"$'\n'
+            fi
+        elif command -v docker &>/dev/null \
+            && docker ps --format "{{.Names}}" 2>/dev/null | grep -q "wp-test-proxy"; then
+            if docker exec wp-test-proxy nginx -t >/dev/null 2>&1; then
+                nginx_valid=true
+            else
+                issues_list="${issues_list}wp-test nginx-proxy configuration invalid"$'\n'
+            fi
         fi
-        local features_json=""
+
+        # 3. Feature registry
+        local features_json="[]"
         if type -t feature_list &>/dev/null; then
-            local fid
-            while IFS= read -r fid; do
-                [ -z "$fid" ] && continue
-                local entry
-                entry=$(printf '"%s"' "$fid")
-                if [ -n "$features_json" ]; then
-                    features_json="${features_json},${entry}"
-                else
-                    features_json="$entry"
-                fi
-            done < <(feature_list)
+            features_json=$(feature_list | jq -R . | jq -s '.')
+        else
+            issues_list="${issues_list}feature registry not loaded"$'\n'
         fi
-        json_output "$(printf '{"command":"check","version":"%s","ready":%s,"prerequisites":[%s],"features":[%s]}' \
-            "$VERSION" "$nginx_ready" "$prereqs_json" "$features_json")"
-        return 0
+
+        # 4. Backup directory
+        local backup_writable=false
+        if [ -d "$BACKUP_DIR" ] && [ -w "$BACKUP_DIR" ]; then
+            backup_writable=true
+        else
+            issues_list="${issues_list}backup directory not writable: ${BACKUP_DIR}"$'\n'
+        fi
+
+        local issues_json ready=false
+        issues_json=$(printf '%s' "$issues_list" | jq -R 'select(length > 0)' | jq -s '.')
+        [ -z "$issues_list" ] && ready=true
+
+        json_output "$(jq -nc --arg v "$VERSION" \
+            --argjson r "$ready" --argjson nv "$nginx_valid" \
+            --argjson bw "$backup_writable" --argjson p "$prereqs_json" \
+            --argjson i "$issues_json" --argjson f "$features_json" \
+            '{command: "check", version: $v, ready: $r, nginx_valid: $nv,
+              backup_writable: $bw, prerequisites: $p, issues: $i,
+              features: $f}')"
+        if [ "$ready" = true ]; then
+            return 0
+        else
+            return 1
+        fi
     fi
 
     # Show header
