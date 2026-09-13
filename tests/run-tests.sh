@@ -1706,6 +1706,126 @@ for helper_fn in smart_copy smart_mkdir smart_write; do
 done
 
 ################################################################################
+# SECTION 26: feature_remove — multi-template + template-less holes (issue #16)
+################################################################################
+log_section "feature_remove multi-template / template-less"
+
+# registry.sh + all features were sourced in SECTION 18; re-source defensively
+# so this block survives section reordering.
+if ! type -t feature_remove &>/dev/null || ! feature_exists "security" 2>/dev/null; then
+    # shellcheck source=/dev/null
+    source "${SCRIPT_DIR}/../lib/registry.sh" 2>/dev/null || true
+    for vf in "${SCRIPT_DIR}/../lib/features/"*.sh; do
+        # shellcheck source=/dev/null
+        source "$vf" 2>/dev/null || true
+    done
+fi
+
+# (a) Multi-template split: security registers FEATURE_TEMPLATE as the
+#     comma-joined "security-headers.conf,security-http.conf". Remove must
+#     delete EACH file and strip EACH include line — on the old code the whole
+#     comma string was matched literally, so nothing was ever removed.
+#
+# Everything below runs against a fake tree. This machine has real copies of
+# these files (conf.d, sites-enabled, ~/.wp-test) — the path helpers are
+# stubbed to empty dirs so removal can only ever touch the fixtures.
+REMOVE_FAKE=$(mktemp -d)
+mkdir -p "${REMOVE_FAKE}/conf.d" "${REMOVE_FAKE}/sites" \
+         "${REMOVE_FAKE}/wp-nginx/conf.d" "${REMOVE_FAKE}/wp-nginx/vhost.d" \
+         "${REMOVE_FAKE}/empty-confd" "${REMOVE_FAKE}/empty-sites"
+
+echo "# headers" > "${REMOVE_FAKE}/conf.d/security-headers.conf"
+echo "# rate limiting" > "${REMOVE_FAKE}/conf.d/security-http.conf"
+echo "# headers" > "${REMOVE_FAKE}/wp-nginx/conf.d/security-headers.conf"
+echo "# rate limiting" > "${REMOVE_FAKE}/wp-nginx/conf.d/security-http.conf"
+cat > "${REMOVE_FAKE}/sites/fake-site.conf" <<'REOF'
+server {
+    listen 443 ssl;
+    include /etc/nginx/conf.d/security-headers.conf;
+    include /etc/nginx/conf.d/security-http.conf;
+}
+REOF
+cat > "${REMOVE_FAKE}/wp-nginx/vhost.d/fake.local" <<'REOF'
+include /etc/nginx/conf.d/security-headers.conf;
+include /etc/nginx/conf.d/security-http.conf;
+REOF
+
+get_nginx_confd_dir() { echo "${REMOVE_FAKE}/conf.d"; }
+get_nginx_sites_dir() { echo "${REMOVE_FAKE}/sites"; }
+WP_TEST_NGINX_BAK="${WP_TEST_NGINX:-}"
+WP_TEST_NGINX="${REMOVE_FAKE}/wp-nginx"
+
+if DRY_RUN=false feature_remove "security" >/dev/null 2>&1; then
+    remove_rc=0
+else
+    remove_rc=$?
+fi
+
+# Restore the real resolvers before anything else can observe the stubs
+if [ -n "$WP_TEST_NGINX_BAK" ]; then WP_TEST_NGINX="$WP_TEST_NGINX_BAK"; else unset WP_TEST_NGINX; fi
+source "${SCRIPT_DIR}/../nginx-optimizer-lib/optimizer.sh" 2>/dev/null || true
+
+if [ "$remove_rc" -eq 0 ]; then
+    log_pass "feature_remove security returns 0 when files existed"
+else
+    log_fail "feature_remove security returned $remove_rc (multi-template not split?)"
+fi
+
+removed_files_ok=true
+for f in "${REMOVE_FAKE}/conf.d/security-headers.conf" \
+         "${REMOVE_FAKE}/conf.d/security-http.conf" \
+         "${REMOVE_FAKE}/wp-nginx/conf.d/security-headers.conf" \
+         "${REMOVE_FAKE}/wp-nginx/conf.d/security-http.conf"; do
+    [ -f "$f" ] && { removed_files_ok=false; echo "  still present: $f"; }
+done
+if [ "$removed_files_ok" = true ]; then
+    log_pass "feature_remove deletes EVERY file of a comma-joined FEATURE_TEMPLATE"
+else
+    log_fail "feature_remove left template files behind (comma-joined list never split)"
+fi
+
+includes_gone=true
+for v in "${REMOVE_FAKE}/sites/fake-site.conf" "${REMOVE_FAKE}/wp-nginx/vhost.d/fake.local"; do
+    if grep -q "security-headers.conf\|security-http.conf" "$v" 2>/dev/null; then
+        includes_gone=false
+        echo "  include lines left in: $v"
+    fi
+done
+if [ "$includes_gone" = true ]; then
+    log_pass "feature_remove strips EVERY include line of a multi-template feature"
+else
+    log_fail "feature_remove left include directives behind"
+fi
+
+rm -rf "$REMOVE_FAKE"
+
+# (b) Template-less features must not hard-fail. redis / server-tuning /
+#     php-fpm-tuning register FEATURE_TEMPLATE="" and need
+#     feature_remove_custom_<id> hooks — normalised like the detect/apply
+#     hooks (php-fpm-tuning -> php_fpm_tuning).
+for rfeat in server_tuning php_fpm_tuning redis; do
+    if declare -f "feature_remove_custom_${rfeat}" &>/dev/null; then
+        log_pass "feature_remove_custom_${rfeat} exists"
+    else
+        log_fail "feature_remove_custom_${rfeat} missing — template-less feature hard-fails"
+    fi
+done
+
+# (c) End-to-end dry-run: exits 0 and never prints "has no template".
+#     A fake HOME keeps the whole run (lock file, logs, wp-test lookup) away
+#     from this machine's real config; --dry-run makes every hook write-safe.
+REMOVE_FAKE_HOME=$(mktemp -d)
+for rfeat in redis server-tuning php-fpm-tuning; do
+    r_out=$(HOME="$REMOVE_FAKE_HOME" "${OPTIMIZER}" remove --feature "$rfeat" --dry-run --no-color --force 2>&1) && r_rc=0 || r_rc=$?
+    if [ "$r_rc" -eq 0 ] && ! printf '%s' "$r_out" | grep -q "has no template"; then
+        log_pass "remove --feature $rfeat --dry-run exits 0, no 'has no template'"
+    else
+        log_fail "remove --feature $rfeat --dry-run rc=$r_rc $(printf '%s' "$r_out" | grep -m1 'has no template')"
+    fi
+done
+rm -rf "$REMOVE_FAKE_HOME"
+
+################################################################################
 # Summary
 ################################################################################
 echo ""

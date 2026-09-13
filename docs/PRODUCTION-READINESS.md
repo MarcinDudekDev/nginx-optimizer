@@ -245,10 +245,10 @@ each, printed on every `test-corpus.sh` run.
 - [ ] **`remove` command** - cleanly uninstall optimizations
 - [ ] **`doctor` command** - diagnose common issues
 - [ ] **`export` command** - export current config as template
-- [ ] **Partial rollback** - undo just one feature. *Partly built:* `feature_remove()` deletes one
-      template file and its include line only. Cannot remove multi-template features (`FEATURE_TEMPLATE`
-      is comma-joined and never split), hard-fails on template-less ones (server-tuning, php-fpm-tuning,
-      redis), and reverses no in-place edits. No `feature_remove_custom_*` exists anywhere in the tree.
+- [ ] **Partial rollback** - undo just one feature. *Mostly built:* `feature_remove()` splits
+      comma-joined `FEATURE_TEMPLATE` lists and removes every file + include line, and
+      `feature_remove_custom_*` hooks cover the template-less features (server-tuning,
+      php-fpm-tuning, redis). Remaining gap: in-place http3 `listen` edits are not reversed.
 
 ### 4.2 Output/Feedback Issues
 - [ ] No JSON output mode for tooling integration

@@ -214,6 +214,110 @@ feature_apply_custom_php_fpm_tuning() {
 }
 
 ################################################################################
+# Custom Remove Logic
+################################################################################
+
+# Remove PHP-FPM tuning written by feature_apply_custom_php_fpm_tuning.
+#
+# Apply keeps a pristine copy at ${pool}.before-tuning — restoring it is the
+# clean remove. If that backup is gone but the pool still carries our
+# signature (uncommented pm.process_idle_timeout / pm.max_requests — stock
+# www.conf only ships them commented), the pm.* lines this tool manages are
+# commented back out so FPM falls back to its compiled defaults — and only
+# after writing a fresh ${pool}.remove-bak. A live pool is never rewritten
+# without a backup.
+# Args: $1 = target_site (optional, ignored for global feature)
+# Returns: 0 on success, 1 if nothing was applied
+feature_remove_custom_php_fpm_tuning() {
+    # shellcheck disable=SC2034  # target_site reserved for API compatibility (global feature)
+    local target_site="${1:-}"
+
+    local pool_file=""
+    if type -t _fpm_find_pool_config &>/dev/null; then
+        pool_file=$(_fpm_find_pool_config)
+    fi
+
+    local before_bak="${pool_file}.before-tuning"
+    local has_before=false has_marker=false
+    if [[ -n "$pool_file" ]] && [[ -f "$before_bak" ]]; then
+        has_before=true
+    fi
+    if [[ -n "$pool_file" ]] && [[ -f "$pool_file" ]] && \
+       grep -qE '^[[:space:]]*pm\.(process_idle_timeout|max_requests)[[:space:]]*=' "$pool_file" 2>/dev/null; then
+        has_marker=true
+    fi
+
+    if [[ "$has_before" == false ]] && [[ "$has_marker" == false ]]; then
+        if [ "${DRY_RUN:-false}" = true ]; then
+            return 0
+        fi
+        if type -t log_info &>/dev/null; then
+            log_info "PHP-FPM tuning not applied — nothing to remove"
+        fi
+        return 1
+    fi
+
+    if [ "${DRY_RUN:-false}" = true ]; then
+        if type -t ui_step_path &>/dev/null; then
+            if [[ "$has_before" == true ]]; then
+                ui_step_path "Would restore" "$before_bak"
+            else
+                ui_step_path "Would comment out pm.* tuning in" "$pool_file"
+            fi
+        fi
+        return 0
+    fi
+
+    local SUDO=""
+    [[ ! -w "$pool_file" ]] && SUDO="sudo"
+
+    if [[ "$has_before" == true ]]; then
+        if $SUDO cp "$before_bak" "$pool_file"; then
+            $SUDO rm -f "$before_bak"
+            if type -t ui_step_path &>/dev/null; then
+                ui_step_path "Restored" "PHP-FPM pool from ${before_bak}"
+            fi
+            return 0
+        fi
+        return 1
+    fi
+
+    # Backup missing but our signature is present: back up the live pool
+    # BEFORE touching it, then comment out the directives this tool manages.
+    if ! $SUDO cp "$pool_file" "${pool_file}.remove-bak"; then
+        return 1
+    fi
+    $SUDO sed -i.rmback \
+        -e 's|^[[:space:]]*pm[[:space:]]*=|; &|' \
+        -e 's|^[[:space:]]*pm\.max_children[[:space:]]*=|; &|' \
+        -e 's|^[[:space:]]*pm\.start_servers[[:space:]]*=|; &|' \
+        -e 's|^[[:space:]]*pm\.min_spare_servers[[:space:]]*=|; &|' \
+        -e 's|^[[:space:]]*pm\.max_spare_servers[[:space:]]*=|; &|' \
+        -e 's|^[[:space:]]*pm\.process_idle_timeout[[:space:]]*=|; &|' \
+        -e 's|^[[:space:]]*pm\.max_requests[[:space:]]*=|; &|' \
+        "$pool_file" 2>/dev/null || \
+        $SUDO sed -i '' \
+        -e 's|^[[:space:]]*pm[[:space:]]*=|; &|' \
+        -e 's|^[[:space:]]*pm\.max_children[[:space:]]*=|; &|' \
+        -e 's|^[[:space:]]*pm\.start_servers[[:space:]]*=|; &|' \
+        -e 's|^[[:space:]]*pm\.min_spare_servers[[:space:]]*=|; &|' \
+        -e 's|^[[:space:]]*pm\.max_spare_servers[[:space:]]*=|; &|' \
+        -e 's|^[[:space:]]*pm\.process_idle_timeout[[:space:]]*=|; &|' \
+        -e 's|^[[:space:]]*pm\.max_requests[[:space:]]*=|; &|' \
+        "$pool_file" 2>/dev/null
+    $SUDO rm -f "${pool_file}.rmback" 2>/dev/null
+
+    if type -t ui_step_path &>/dev/null; then
+        ui_step_path "Reverted PHP-FPM tuning" "${pool_file} (backup: ${pool_file}.remove-bak)"
+    fi
+    if type -t log_to_file &>/dev/null; then
+        log_to_file "INFO" "PHP-FPM tuning commented out; pre-remove copy kept at ${pool_file}.remove-bak"
+    fi
+
+    return 0
+}
+
+################################################################################
 # Helper Functions
 ################################################################################
 

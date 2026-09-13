@@ -36,7 +36,7 @@ input validation, auto-rollback safety, and pre-flight checks.
 ## v0.10.x - Polish & Robustness
 
 ### Commands
-- [ ] `remove` command - Cleanly uninstall optimizations
+- [x] `remove` command - Cleanly uninstall optimizations
 - [ ] `diff` command - Show exact changes before applying
 - [x] `doctor` command - Diagnose common issues
 
@@ -85,13 +85,14 @@ input validation, auto-rollback safety, and pre-flight checks.
 
 ### Features
 - [ ] Partial rollback (undo single feature).
-      **Partly built, further from done than it looks.** `cmd_remove()` delegates to
-      `feature_remove()`, which only deletes one template file and sed-drops lines
-      naming it. Three holes: no `feature_remove_custom_*` exists anywhere in the
-      tree; multi-template features are unremovable because `FEATURE_TEMPLATE` is a
-      comma-joined string that `feature_remove` never splits (security,
-      fastcgi-cache); template-less features hard-fail (server-tuning,
-      php-fpm-tuning, redis). It also reverses no in-place edits at all.
+      **Mostly built.** `feature_remove()` splits comma-joined `FEATURE_TEMPLATE`
+      lists (security, fastcgi-cache) and removes every file + include line, and
+      `feature_remove_custom_*` hooks cover the three template-less features:
+      server-tuning strips its `worker_*` lines (or restores an interrupted-apply
+      `.tuning-bak`), php-fpm-tuning restores `.before-tuning` or comments its
+      `pm.*` lines behind a fresh backup, redis drops the compose service and its
+      container. Remaining gap: in-place `listen ... quic` edits from http3 are
+      still not reversed.
 - [ ] Config diff visualization
 - [x] Missing core optimizations (worker_processes, open_file_cache, sendfile, etc.)
       — **shipped** as the `server-tuning` and `open-file-cache` features.
