@@ -1310,8 +1310,16 @@ printf '#!/bin/bash\nexit 0\n' > "${RBX_BIN_OK}/nginx"
 printf '#!/bin/bash\nexit 1\n' > "${RBX_BIN_BAD}/nginx"
 chmod +x "${RBX_BIN_OK}/nginx" "${RBX_BIN_BAD}/nginx"
 
-# A PATH with no nginx at all: enough tools for find/stat/hash, nothing else.
-RBX_PATH_NO_NGINX="/usr/bin:/bin:/sbin:/usr/sbin"
+# A PATH with no nginx at all. Do not reuse /usr/sbin — GitHub ubuntu-latest
+# can have nginx there, so the "absent" case would run a real `nginx -t` and
+# fail the skip assertion (PR #13 CI).
+RBX_BIN_NONE="${RBX_ROOT}/bin-none"
+mkdir -p "$RBX_BIN_NONE"
+for rbx_cmd in find sha256sum shasum md5sum md5 stat cut tr; do
+    rbx_p=$(command -v "$rbx_cmd" 2>/dev/null) || continue
+    ln -s "$rbx_p" "$RBX_BIN_NONE/"
+done
+RBX_PATH_NO_NGINX="$RBX_BIN_NONE"
 
 # Run the verifier in an isolated subshell.
 #   $1 = PATH to use (stub-bin prefix, or RBX_PATH_NO_NGINX)
