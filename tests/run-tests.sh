@@ -1881,6 +1881,8 @@ log_section "Progress Indicators"
 # A feature that is still running must not look finished: the in-progress line
 # uses the pending marker (○) with an i/n counter, and the completed
 # checkmark (✓ / *) is reserved for the result line.
+# These must fire even with no nginx installed (CI). A set -e abort after the
+# DRY RUN banner used to skip the whole progress block (same hole as PR #5).
 prog_output=$("${OPTIMIZER}" optimize --dry-run --no-color --force 2>&1 || true)
 
 if printf '%s' "$prog_output" | grep -qE '(✓|\*)[[:space:]]+Applying .*\.\.\.'; then
