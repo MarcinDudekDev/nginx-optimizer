@@ -1271,6 +1271,149 @@ else
 fi
 
 ################################################################################
+# SECTION 22: Rollback verification (issue #12)
+################################################################################
+log_section "Rollback Verification (apply -> rollback -> compare)"
+
+# backup.sh is side-effect-free at source time (it only sets CURRENT_BACKUP_DIR).
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/../nginx-optimizer-lib/backup.sh"
+
+# log_* live in nginx-optimizer.sh, not the lib — define the missing ones so the
+# verifier can run standalone. They still echo (tags only, no colors): the
+# restore assertions below grep for the success line in captured output.
+if ! type -t log_info    &>/dev/null; then log_info()    { echo "[INFO] $*"; }; fi
+if ! type -t log_success &>/dev/null; then log_success() { echo "[SUCCESS] $*"; }; fi
+if ! type -t log_warn    &>/dev/null; then log_warn()    { echo "[WARN] $*"; }; fi
+if ! type -t log_error   &>/dev/null; then log_error()   { echo "[ERROR] $*"; }; fi
+
+# Fixture layout — everything under one mktemp root, nothing touches /etc/nginx
+# or the real ~/.wp-test. HOME is faked per-call so dir_pairs in
+# verify_restored_files resolve "$HOME/.wp-test/nginx" to the fixture dest.
+# nginx is stubbed: the real `nginx -t` on this machine fails on an unrelated
+# /var/run mkdir, so it must never decide a test outcome.
+RBX_ROOT=$(mktemp -d)
+RBX_HOME="${RBX_ROOT}/home"
+RBX_BAKDIR="${RBX_ROOT}/backups"
+RBX_BAK="${RBX_BAKDIR}/20260101-120000"
+RBX_DEST="${RBX_HOME}/.wp-test/nginx"
+RBX_BIN_OK="${RBX_ROOT}/bin-ok"
+RBX_BIN_BAD="${RBX_ROOT}/bin-bad"
+
+mkdir -p "${RBX_BAK}/wp-test-nginx/conf.d" "${RBX_DEST}/conf.d" \
+    "$RBX_BIN_OK" "$RBX_BIN_BAD" "${RBX_HOME}/.wp-test/sites"
+
+printf 'server { stub-original; }\n' > "${RBX_BAK}/wp-test-nginx/conf.d/x.conf"
+cp "${RBX_BAK}/wp-test-nginx/conf.d/x.conf" "${RBX_DEST}/conf.d/x.conf"
+
+printf '#!/bin/bash\nexit 0\n' > "${RBX_BIN_OK}/nginx"
+printf '#!/bin/bash\nexit 1\n' > "${RBX_BIN_BAD}/nginx"
+chmod +x "${RBX_BIN_OK}/nginx" "${RBX_BIN_BAD}/nginx"
+
+# A PATH with no nginx at all: enough tools for find/stat/hash, nothing else.
+RBX_PATH_NO_NGINX="/usr/bin:/bin:/sbin:/usr/sbin"
+
+# Run the verifier in an isolated subshell.
+#   $1 = PATH to use (stub-bin prefix, or RBX_PATH_NO_NGINX)
+rbx_verify() (
+    HOME="$RBX_HOME"
+    PATH="$1"
+    verify_restored_files "$2"
+)
+
+# Run restore_backup in an isolated subshell against the fixture backup dir.
+#   $1 = backup timestamp dir name
+rbx_restore() (
+    HOME="$RBX_HOME"
+    PATH="${RBX_BIN_OK}:$PATH"
+    BACKUP_DIR="$RBX_BAKDIR"
+    WP_TEST_NGINX="$RBX_DEST"
+    WP_TEST_SITES="${RBX_HOME}/.wp-test/sites"
+    STATE_FILE="${RBX_ROOT}/state.json"
+    FORCE=true
+    restore_backup "$1"
+)
+
+# (a) _file_checksum: same file twice -> same digest; different file -> differs.
+rbx_sum1=$(_file_checksum "${RBX_DEST}/conf.d/x.conf")
+rbx_sum2=$(_file_checksum "${RBX_DEST}/conf.d/x.conf")
+printf 'server { stub-different; }\n' > "${RBX_ROOT}/other.conf"
+rbx_sum3=$(_file_checksum "${RBX_ROOT}/other.conf")
+if [ -n "$rbx_sum1" ] && [ "$rbx_sum1" = "$rbx_sum2" ] && [ "$rbx_sum1" != "$rbx_sum3" ]; then
+    log_pass "_file_checksum is stable and distinguishes different files"
+else
+    log_fail "_file_checksum unstable ($rbx_sum1 vs $rbx_sum2) or collides ($rbx_sum3)"
+fi
+
+# (b) Happy path: dest identical to backup, stub nginx -t passes -> rc 0.
+if rbx_verify "${RBX_BIN_OK}:$PATH" "$RBX_BAK" >/dev/null 2>&1; then
+    log_pass "verify_restored_files returns 0 when restored files match"
+else
+    log_fail "verify_restored_files failed on identical files"
+fi
+
+# (c) nginx absent from PATH -> -t check skipped, match still returns 0.
+if rbx_verify "$RBX_PATH_NO_NGINX" "$RBX_BAK" >/dev/null 2>&1; then
+    log_pass "verify_restored_files skips nginx -t when nginx is absent"
+else
+    log_fail "verify_restored_files failed solely because nginx is absent"
+fi
+
+# (d) nginx present but `nginx -t` fails -> non-zero (fail closed).
+if rbx_verify "${RBX_BIN_BAD}:$PATH" "$RBX_BAK" >/dev/null 2>&1; then
+    log_fail "verify_restored_files ignores a failing nginx -t"
+else
+    log_pass "verify_restored_files returns non-zero when nginx -t fails"
+fi
+
+# (e) Dest file content drifted -> non-zero. This is the fail-closed bug:
+#     the verifier used to warn and still return 0.
+printf 'server { stub-mutated; }\n' > "${RBX_DEST}/conf.d/x.conf"
+if rbx_verify "${RBX_BIN_OK}:$PATH" "$RBX_BAK" >/dev/null 2>&1; then
+    log_fail "verify_restored_files returns 0 on checksum mismatch"
+else
+    log_pass "verify_restored_files returns non-zero on checksum mismatch"
+fi
+
+# (f) Dest file missing entirely -> non-zero.
+rm -f "${RBX_DEST}/conf.d/x.conf"
+if rbx_verify "${RBX_BIN_OK}:$PATH" "$RBX_BAK" >/dev/null 2>&1; then
+    log_fail "verify_restored_files returns 0 when a restored file is missing"
+else
+    log_pass "verify_restored_files returns non-zero when a restored file is missing"
+fi
+
+# (g) Integration: mutate dest, restore the fixture backup via manual_restore
+#     (fixture has no restore.sh), expect rc 0 and dest back to backup content.
+printf 'server { stub-mutated; }\n' > "${RBX_DEST}/conf.d/x.conf"
+restore_out=$(rbx_restore "20260101-120000" 2>&1) && restore_rc=0 || restore_rc=$?
+if [ "$restore_rc" -eq 0 ] && \
+   cmp -s "${RBX_BAK}/wp-test-nginx/conf.d/x.conf" "${RBX_DEST}/conf.d/x.conf" && \
+   printf "%s" "$restore_out" | grep -q "restored successfully"; then
+    log_pass "restore_backup restores drifted files and reports success"
+else
+    log_fail "restore_backup happy path broken (rc=$restore_rc)"
+fi
+
+# (h) Fail closed end-to-end: a restore.sh that exits 0 without restoring
+#     simulates a restore that "succeeded" while leaving drift behind.
+#     restore_backup must propagate the verification failure — no success, rc 1.
+RBX_BAK2="${RBX_BAKDIR}/20260102-120000"
+mkdir -p "${RBX_BAK2}/wp-test-nginx/conf.d"
+printf 'server { stub-original; }\n' > "${RBX_BAK2}/wp-test-nginx/conf.d/x.conf"
+printf '#!/bin/bash\nexit 0\n' > "${RBX_BAK2}/restore.sh"
+printf 'server { stub-mutated; }\n' > "${RBX_DEST}/conf.d/x.conf"
+restore_out=$(rbx_restore "20260102-120000" 2>&1) && restore_rc=0 || restore_rc=$?
+if [ "$restore_rc" -ne 0 ] && \
+   ! printf "%s" "$restore_out" | grep -q "restored successfully"; then
+    log_pass "restore_backup fails closed when verification fails (rc=$restore_rc, no success message)"
+else
+    log_fail "restore_backup reported success despite failed verification"
+fi
+
+rm -rf "$RBX_ROOT"
+
+################################################################################
 # Summary
 ################################################################################
 echo ""
